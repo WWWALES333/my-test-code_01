@@ -225,22 +225,67 @@ class WeeklyReportDownloader:
                                             'filename': filename,
                                             'part': part
                                         })
+                                    else:
+                                        # 方法2.6：如果主题中有日期，使用日期+类型作为文件名
+                                        date_match = re.search(r'(\d{4})年(\d{1,2})月', subject)
+                                        if date_match:
+                                            year, month = date_match.groups()
+                                            filename = f"{year}年{month}月工作报告.docx"
+                                            attachments.append({
+                                                'filename': filename,
+                                                'part': part
+                                            })
 
                 if not attachments:
-                    continue
+                    # 方法3：尝试从主题直接推断附件名（针对特殊格式邮件）
+                    if '周报' in subject or '月报' in subject:
+                        # 尝试从主题提取完整文件名
+                        import re
+                        # 匹配各种格式的报告名
+                        patterns = [
+                            r'([^<\s]+周报[^>\s]*)',  # xxx周报xxx
+                            r'([^<\s]+月报[^>\s]*)',  # xxx月报xxx
+                            r'【([^】]+)】',  # 【xxx】
+                        ]
+                        for pattern in patterns:
+                            match = re.search(pattern, subject)
+                            if match:
+                                potential_name = match.group(1).strip()
+                                # 清理一些特殊字符
+                                potential_name = re.sub(r'[<>:"/\\|?*]', '', potential_name)
+                                if potential_name:
+                                    filename = potential_name
+                                    if not filename.lower().endswith(('.docx', '.doc')):
+                                        filename += '.docx'
+                                    # 创建一个虚拟的part来存储这个文件名
+                                    attachments.append({
+                                        'filename': filename,
+                                        'part': None,  # 标记为需要特殊处理
+                                        'from_subject': True
+                                    })
+                                    break
 
-                # 优先使用邮件主题解析日期（更准确），其次用附件名
+                if not attachments:
+                    logger.debug(f"无法提取附件，跳过: {subject[:50]}")
+
+                # 优先使用邮件日期解析时间（更准确），其次用文件名
                 filename_for_filter = attachments[0].get('filename', '')
                 # 合并主题和附件名用于日期解析
                 date_source = subject + ' ' + filename_for_filter
 
                 # 根据报告类型使用不同的日期解析函数
                 if report_type == 'monthly':
-                    # 月报：使用月报日期解析
+                    # 月报：优先使用邮件日期，其次用文件名解析
                     year_folder, month_folder, file_year, file_month = self._extract_month_info(date_source)
+                    # 如果文件名无法解析出有效日期，使用邮件日期
+                    if file_year == datetime.now().year and file_month == datetime.now().month and msg_date:
+                        file_year = msg_date.year
+                        file_month = msg_date.month
+                        year_folder = str(file_year)
+                        month_folder = f"{year_folder}年{file_month:02d}月"
                     file_week = None
                 else:
-                    # 周报：使用周报日期解析
+                    # 周报：优先使用邮件日期
                     year_folder, month_week_folder, file_year, file_month, file_week = self._extract_time_info(date_source, msg_date)
 
                 # 日期过滤：按文件名中的日期
@@ -413,6 +458,10 @@ class WeeklyReportDownloader:
                 filename = att.get('filename', '')
                 # 使用 part
                 part = att.get('part')
+                # 如果是直接从主题推断的附件，跳过（无法获取内容）
+                if att.get('from_subject', False):
+                    logger.warning(f"无法获取附件内容（需手动下载）: {filename}")
+                    continue
                 if part:
                     try:
                         content = part.get_payload(decode=True)
