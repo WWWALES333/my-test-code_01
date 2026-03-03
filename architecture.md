@@ -35,6 +35,8 @@ my-test-code/
 | hashlib | MD5去重 |
 | logging | 日志记录 |
 | json | 配置和历史数据 |
+| schedule | 定时任务调度 |
+| requests | HTTP请求（飞书Webhook通知） |
 
 ## 4. 核心模块
 
@@ -57,6 +59,10 @@ my-test-code/
 | `_get_output_path` | 计算输出文件路径 |
 | `download_and_classify` | 主流程：连接→搜索→下载→分类→记录 |
 | `_print_summary` | 打印运行总结 |
+| `send_notification` | 发送飞书Webhook通知 |
+| `run_download` | 执行下载任务（供定时调用） |
+| `setup_scheduler` | 设置定时任务 |
+| `run_scheduler` | 运行定时任务模式 |
 
 ## 5. 数据流
 
@@ -97,6 +103,35 @@ my-test-code/
 | report_type_filter | 报告类型（weekly/monthly/all） |
 | download_history_file | 下载历史文件名 |
 | log_file | 运行日志文件名 |
+| scheduler.enabled | 是否启用定时任务 |
+| scheduler.weekly_day | 每周运行日（1=周一） |
+| scheduler.monthly_day | 每月运行日 |
+| scheduler.hour | 运行小时 |
+| scheduler.minute | 运行分钟 |
+| notify.enabled | 是否启用通知 |
+| notify.webhook_url | 飞书Webhook地址 |
+| notify.type | 通知类型 |
+
+## 7. 运行模式
+
+### 7.1 单次运行
+```bash
+python main.py
+```
+
+### 7.2 定时任务模式
+```bash
+python main.py --daemon
+# 或
+python main.py -d
+```
+
+### 7.3 命令行参数
+| 参数 | 说明 |
+|------|------|
+| -c, --config | 配置文件路径 |
+| --daemon, -d | 以定时任务模式运行 |
+| --once | 只运行一次 |
 
 ## 7. 注意事项
 

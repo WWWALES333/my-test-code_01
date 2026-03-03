@@ -11,6 +11,9 @@ import json
 import hashlib
 import logging
 import email
+import schedule
+import time
+import requests
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -664,6 +667,216 @@ class WeeklyReportDownloader:
 
         print()
 
+    def send_notification(self):
+        """发送飞书通知"""
+        notify_config = self.config.get("notify", {})
+        if not notify_config.get("enabled", False):
+            return
+
+        webhook_url = notify_config.get("webhook_url", "")
+        if not webhook_url:
+            logger.warning("飞书Webhook URL未配置，跳过通知")
+            return
+
+        # 构建消息内容
+        run_time = self.run_log.get("run_time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        total = self.run_log.get("total_emails", 0)
+        downloaded_count = len(self.run_log.get("downloaded", []))
+        skipped_count = len(self.run_log.get("skipped", []))
+        failed_count = len(self.run_log.get("failed", []))
+
+        # 构建文件列表
+        downloaded_files = self.run_log.get("downloaded", [])
+        file_list_text = ""
+        if downloaded_files:
+            file_list = [f["filename"][:30] for f in downloaded_files[:5]]
+            file_list_text = "\n".join([f"• {f}" for f in file_list])
+            if len(downloaded_files) > 5:
+                file_list_text += f"\n• ... 还有 {len(downloaded_files) - 5} 个文件"
+
+        # 飞书消息卡片格式
+        msg_content = {
+            "msg_type": "interactive",
+            "card": {
+                "header": {
+                    "title": {
+                        "tag": "plain_text",
+                        "content": "📥 销售周报下载完成"
+                    },
+                    "template": "blue"
+                },
+                "elements": [
+                    {
+                        "tag": "div",
+                        "fields": [
+                            {
+                                "is_short": True,
+                                "text": {
+                                    "tag": "lark_md",
+                                    "content": f"**运行时间**\n{run_time}"
+                                }
+                            },
+                            {
+                                "is_short": True,
+                                "text": {
+                                    "tag": "lark_md",
+                                    "content": f"**扫描邮件**\n{total} 封"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "div",
+                        "fields": [
+                            {
+                                "is_short": True,
+                                "text": {
+                                    "tag": "lark_md",
+                                    "content": f"**成功下载**\n✅ {downloaded_count} 个"
+                                }
+                            },
+                            {
+                                "is_short": True,
+                                "text": {
+                                    "tag": "lark_md",
+                                    "content": f"**跳过(重复)**\n⏭️ {skipped_count} 个"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "div",
+                        "fields": [
+                            {
+                                "is_short": True,
+                                "text": {
+                                    "tag": "lark_md",
+                                    "content": f"**失败**\n❌ {failed_count} 个"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+
+        if file_list_text:
+            msg_content["card"]["elements"].append({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"**新增文件**\n{file_list_text}"
+                }
+            })
+
+        # 添加底部提示
+        msg_content["card"]["elements"].append({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": "请及时检查下载结果，确认文件分类是否正确。"
+            }
+        })
+
+        try:
+            response = requests.post(webhook_url, json=msg_content, timeout=10)
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("code") == 0:
+                    logger.info("飞书通知发送成功")
+                else:
+                    logger.warning(f"飞书通知发送失败: {result.get('msg')}")
+            else:
+                logger.warning(f"飞书通知HTTP错误: {response.status_code}")
+        except Exception as e:
+            logger.warning(f"飞书通知发送失败: {str(e)}")
+
+    def run_download(self, report_type_filter: str = "all"):
+        """执行下载任务（供定时调用）"""
+        # 临时修改报告类型过滤
+        original_filter = self.config.get("report_type_filter", "all")
+        self.config["report_type_filter"] = report_type_filter
+
+        # 重置运行日志
+        self.run_log = {
+            "run_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "total_emails": 0,
+            "downloaded": [],
+            "skipped": [],
+            "failed": []
+        }
+
+        try:
+            self.download_and_classify()
+        finally:
+            # 恢复原始过滤设置
+            self.config["report_type_filter"] = original_filter
+
+            # 发送通知
+            self.send_notification()
+
+    def setup_scheduler(self):
+        """设置定时任务"""
+        scheduler_config = self.config.get("scheduler", {})
+        if not scheduler_config.get("enabled", False):
+            logger.info("定时任务未启用")
+            return
+
+        weekly_day = scheduler_config.get("weekly_day", 1)  # 默认周一
+        monthly_day = scheduler_config.get("monthly_day", 1)  # 默认1号
+        hour = scheduler_config.get("hour", 9)
+        minute = scheduler_config.get("minute", 0)
+
+        # 每周定时任务（周报）
+        if weekly_day == 1:
+            schedule.every().monday.at(f"{hour:02d}:{minute:02d}").do(self.run_download, report_type_filter="weekly")
+        elif weekly_day == 2:
+            schedule.every().tuesday.at(f"{hour:02d}:{minute:02d}").do(self.run_download, report_type_filter="weekly")
+        elif weekly_day == 3:
+            schedule.every().wednesday.at(f"{hour:02d}:{minute:02d}").do(self.run_download, report_type_filter="weekly")
+        elif weekly_day == 4:
+            schedule.every().thursday.at(f"{hour:02d}:{minute:02d}").do(self.run_download, report_type_filter="weekly")
+        elif weekly_day == 5:
+            schedule.every().friday.at(f"{hour:02d}:{minute:02d}").do(self.run_download, report_type_filter="weekly")
+        elif weekly_day == 6:
+            schedule.every().saturday.at(f"{hour:02d}:{minute:02d}").do(self.run_download, report_type_filter="weekly")
+        elif weekly_day == 7:
+            schedule.every().sunday.at(f"{hour:02d}:{minute:02d}").do(self.run_download, report_type_filter="weekly")
+
+        logger.info(f"已设置每周 {['一','二','三','四','五','六','日'][weekly_day-1]} {hour:02d}:{minute:02d} 执行周报下载")
+
+        # 每月定时任务（月报）
+        def run_monthly():
+            """每月定时任务"""
+            self.run_download(report_type_filter="monthly")
+
+        # 每月1号执行
+        schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(run_monthly)
+
+        # 检查是否每月1号（需要额外逻辑判断）
+        # 由于schedule库原生不支持"每月N号"，我们使用每日检查的方式
+        def check_monthly():
+            if datetime.now().day == monthly_day:
+                run_monthly()
+
+        schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(check_monthly)
+        logger.info(f"已设置每月 {monthly_day} 日 {hour:02d}:{minute:02d} 执行月报下载")
+
+        logger.info("定时任务已启动，程序将持续运行...")
+
+    def run_scheduler(self):
+        """运行定时任务模式"""
+        self.setup_scheduler()
+
+        # 立即执行一次
+        logger.info("立即执行一次下载任务...")
+        self.run_download(report_type_filter="all")
+
+        # 进入定时循环
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
+
 
 def main():
     """主函数"""
@@ -671,10 +884,22 @@ def main():
 
     parser = argparse.ArgumentParser(description="销售周报自动下载与分类系统")
     parser.add_argument("-c", "--config", default="config.json", help="配置文件路径")
+    parser.add_argument("--daemon", "-d", action="store_true", help="以定时任务模式运行（后台持续运行）")
+    parser.add_argument("--once", action="store_true", help="只运行一次，不进入定时循环")
     args = parser.parse_args()
 
     downloader = WeeklyReportDownloader(args.config)
-    downloader.download_and_classify()
+
+    # 检查是否启用定时任务
+    scheduler_config = downloader.config.get("scheduler", {})
+    if scheduler_config.get("enabled", False) and args.daemon:
+        # 定时任务模式
+        downloader.run_scheduler()
+    else:
+        # 单次运行模式
+        downloader.download_and_classify()
+        # 发送通知（如果启用）
+        downloader.send_notification()
 
 
 if __name__ == "__main__":

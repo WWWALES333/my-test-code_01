@@ -23,3 +23,19 @@
 - 下载完成通知（飞书/钉钉）
 - 区域分类子目录
 - 自动分析功能
+
+---
+
+## v1.1.0 - 2026-02-28
+
+### 新增功能
+- ✅ 定时自动运行：每周一 + 每月1号自动执行下载任务
+- ✅ 下载完成通知：通过飞书Webhook推送下载结果
+
+### 配置更新
+- 新增 scheduler 配置项（enabled, weekly_day, monthly_day, hour, minute）
+- 新增 notify 配置项（enabled, webhook_url, type）
+
+### 运行方式
+- 单次运行：`python main.py`
+- 定时任务模式：`python main.py --daemon`
