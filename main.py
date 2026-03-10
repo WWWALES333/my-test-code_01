@@ -392,52 +392,34 @@ class WeeklyReportDownloader:
     def _extract_time_info(self, filename: str, email_date=None) -> Tuple[str, str, int, int, int]:
         """
         从文件名解析时间信息
-        优先级：
-        1. 文件名有明确周次（如"2026年2月第4周"）→ 用文件名
-        2. 文件名有日期（如"2026.3.1"）→ 用文件名换算周次
-        3. 以上都没有 → 用邮件发送日期
+        优先用文件名，fallback用邮件日期
         返回: (年份文件夹, 月份周次文件夹, 年, 月, 周)
         """
-        # 优先：从文件名解析 "2026年 2月第 2周"
-        pattern = r'(\d{4})年\s*(\d{1,2})月第\s*(\d{1,2})周'
-        match = re.search(pattern, filename)
-
+        # 1. 完整格式：2026年2月第4周
+        match = re.search(r'(\d{4})年\s*(\d{1,2})月第\s*(\d{1,2})周', filename)
         if match:
-            year = int(match.group(1))
-            month = int(match.group(2))
-            week = int(match.group(3))
-            year_folder = str(year)
-            month_week_folder = f"{month:02d}月第{week}周"
-            return year_folder, month_week_folder, year, month, week
+            year, month, week = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            return str(year), f"{month:02d}月第{week}周", year, month, week
 
-        # 次优：从文件名解析日期 "2026.2.1" 或 "2026-2-1"
-        simple_pattern = r'(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})'
-        simple_match = re.search(simple_pattern, filename)
-        if simple_match:
-            year = int(simple_match.group(1))
-            month = int(simple_match.group(2))
-            day = int(simple_match.group(3))
+        # 2. 日期格式：2026.2.15 或 2026-02-15
+        match = re.search(r'(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})', filename)
+        if match:
+            year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
             week = self._get_week_number(year, month, day)
-            year_folder = str(year)
-            month_week_folder = f"{month:02d}月第{week}周"
-            return year_folder, month_week_folder, year, month, week
+            return str(year), f"{month:02d}月第{week}周", year, month, week
 
-        # 最后：用邮件发送日期
+        # 3. 用邮件发送日期
         if email_date:
-            year = email_date.year
-            month = email_date.month
-            day = email_date.day
+            year, month, day = email_date.year, email_date.month, email_date.day
             week = self._get_week_number(year, month, day)
-            year_folder = str(year)
-            month_week_folder = f"{month:02d}月第{week}周"
-            return year_folder, month_week_folder, year, month, week
+            return str(year), f"{month:02d}月第{week}周", year, month, week
 
-        # 都没有，用当前时间
-        current_year = datetime.now().year
-        current_month = datetime.now().month
-        current_day = datetime.now().day
-        current_week = self._get_week_number(current_year, current_month, current_day)
-        return str(current_year), f"{current_month:02d}月第{current_week}周", current_year, current_month, current_week
+        # 4. 用当前时间
+        year = datetime.now().year
+        month = datetime.now().month
+        day = datetime.now().day
+        week = self._get_week_number(year, month, day)
+        return str(year), f"{month:02d}月第{week}周", year, month, week
 
     def _parse_docx_filename(self, filename: str) -> str:
         """解析并规范化docx文件名"""
