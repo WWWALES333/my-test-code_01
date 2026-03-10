@@ -391,47 +391,21 @@ class WeeklyReportDownloader:
 
     def _extract_time_info(self, filename: str, email_date=None) -> Tuple[str, str, int, int, int]:
         """
-        从文件名或邮件日期中解析时间信息
-        优先级：
-        1. 文件名有明确周次（如"2026年2月第4周"）→ 用文件名
-        2. 文件名有日期（如"2026.3.1"）→ 用文件名换算周次
-        3. 以上都没有 → 用邮件发送日期
+        从邮件发送日期解析时间信息
+        完全忽略文件名，只用邮件发送日期
         返回: (年份文件夹, 月份周次文件夹, 年, 月, 周)
         """
-        # 从文件名解析：2026年 2月第 2周
-        pattern = r'(\d{4})年\s*(\d{1,2})月第\s*(\d{1,2})周'
-        match = re.search(pattern, filename)
-
-        if match:
-            year = int(match.group(1))
-            month = int(match.group(2))
-            week = int(match.group(3))
-            year_folder = str(year)
-            month_week_folder = f"{month:02d}月第{week}周"
-            return year_folder, month_week_folder, year, month, week
-
-        # 从文件名解析简单日期：2026.2.1, 2026.3.1
-        simple_pattern = r'(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})'
-        simple_match = re.search(simple_pattern, filename)
-        if simple_match:
-            year = int(simple_match.group(1))
-            month = int(simple_match.group(2))
-            day = int(simple_match.group(3))
+        # 只用邮件发送日期
+        if email_date:
+            year = email_date.year
+            month = email_date.month
+            day = email_date.day
             week = self._get_week_number(year, month, day)
             year_folder = str(year)
             month_week_folder = f"{month:02d}月第{week}周"
             return year_folder, month_week_folder, year, month, week
 
-        # 没有文件名日期，用邮件发送日期
-        if email_date:
-            year = email_date.year
-            month = email_date.month
-            week = self._get_week_number(year, month, email_date.day)
-            year_folder = str(year)
-            month_week_folder = f"{month:02d}月第{week}周"
-            return year_folder, month_week_folder, year, month, week
-
-        # 都没有，返回当前时间
+        # 没有邮件日期，返回当前时间
         current_year = datetime.now().year
         current_month = datetime.now().month
         current_day = datetime.now().day
@@ -471,17 +445,21 @@ class WeeklyReportDownloader:
                         continue
         return None
 
-    def _extract_month_info(self, filename: str) -> Tuple[str, str, int, int]:
+    def _extract_month_info(self, filename: str, email_date=None) -> Tuple[str, str, int, int]:
         """
-        从文件名中解析月报时间信息
-        格式:
-        - 2026年1月 将军汤 广西区域部门工作月报.docx
-        - 三战区2026年1月月报
-        - 线上战区2026.1月月报.docx
-        - 将军汤四战区26年一月月报
-        - 五战区26年1月月报.docx
+        从邮件发送日期解析月报时间信息
+        完全忽略文件名，只用邮件发送日期
         返回: (年份文件夹, 月份文件夹, 年, 月)
         """
+        # 优先使用邮件发送日期
+        if email_date:
+            year = email_date.year
+            month = email_date.month
+            year_folder = str(year)
+            month_folder = f"{year_folder}年{month:02d}月"
+            return year_folder, month_folder, year, month
+
+        # 没有邮件日期，才从文件名解析作为fallback
         # 格式1: 2026年1月 或 2026年 1月
         pattern = r'(\d{4})年\s*(\d{1,2})月'
         match = re.search(pattern, filename)
