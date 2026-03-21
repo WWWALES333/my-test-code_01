@@ -1938,13 +1938,7 @@ class WeeklyReportDownloader:
         self.config["report_type_filter"] = report_type_filter
 
         # 重置运行日志
-        self.run_log = {
-            "run_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "total_emails": 0,
-            "downloaded": [],
-            "skipped": [],
-            "failed": []
-        }
+        self.run_log = self._create_run_log()
 
         try:
             self.download_and_classify()
@@ -1990,10 +1984,7 @@ class WeeklyReportDownloader:
             """每月定时任务"""
             self.run_download(report_type_filter="monthly")
 
-        # 每月1号执行
-        schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(run_monthly)
-
-        # 检查是否每月1号（需要额外逻辑判断）
+        # 检查是否每月N号（需要额外逻辑判断）
         # 由于schedule库原生不支持"每月N号"，我们使用每日检查的方式
         def check_monthly():
             if datetime.now().day == monthly_day:
