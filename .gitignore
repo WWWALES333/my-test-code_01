@@ -14,7 +14,7 @@ env/
 .venv/
 
 # 输出目录
-06 销售周报/
+data/output/
 downloaded_reports/
 
 # 日志和历史（运行时生成）
