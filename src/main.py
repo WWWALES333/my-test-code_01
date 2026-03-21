@@ -1942,6 +1942,13 @@ class WeeklyReportDownloader:
 
         try:
             self.download_and_classify()
+        except Exception as e:
+            # 定时任务场景下，单次失败不应导致守护进程退出
+            logger.error(f"定时任务执行失败: {str(e)}")
+            self.run_log["failed"].append({
+                "filename": "",
+                "error": str(e)
+            })
         finally:
             # 恢复原始过滤设置
             self.config["report_type_filter"] = original_filter
@@ -2005,7 +2012,10 @@ class WeeklyReportDownloader:
 
         # 进入定时循环
         while True:
-            schedule.run_pending()
+            try:
+                schedule.run_pending()
+            except Exception as e:
+                logger.error(f"定时任务调度异常: {str(e)}")
             time.sleep(60)
 
 
