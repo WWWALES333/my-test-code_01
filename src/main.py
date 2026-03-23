@@ -1011,6 +1011,35 @@ class WeeklyReportDownloader:
 
         raise RuntimeError(f"邮箱连接失败，已重试 {max_attempts} 次: {str(last_error)}")
 
+    def _is_transient_imap_error(self, error: Exception) -> bool:
+        """判断是否为可重试的 IMAP 瞬时错误"""
+        text = str(error).lower()
+        transient_flags = [
+            "socket error",
+            "eof",
+            "broken pipe",
+            "timed out",
+            "connection reset",
+            "unexpected response",
+            "imap4.abort"
+        ]
+        return any(flag in text for flag in transient_flags)
+
+    def _reconnect_mailbox_for_fetch(self, mailbox: MailBox) -> bool:
+        """在邮件抓取中断时重连 mailbox.client"""
+        try:
+            mailbox.logout()
+        except Exception:
+            pass
+
+        try:
+            new_mailbox = self.connect_mailbox()
+            mailbox.client = new_mailbox.client
+            return True
+        except Exception as e:
+            logger.error(f"重连邮箱失败: {str(e)}")
+            return False
+
     def _get_mail_search_start(self) -> datetime:
         """获取邮箱检索起始时间，默认从 2026-01-01 开始"""
         search_config = self.config.get("mail_search", {})
@@ -1042,16 +1071,58 @@ class WeeklyReportDownloader:
             logger.warning(f"搜索失败: {typ}")
             return []
 
-        msg_id_list = msg_ids[0].split()
+        # 倒序遍历：优先处理最新邮件，避免中途断链导致“最新周报缺失”
+        msg_id_list = list(reversed(msg_ids[0].split()))
         logger.info(f"邮箱中共有 {len(msg_id_list)} 封邮件")
 
+        fetch_retry_config = self._get_retry_config(
+            retry_type="imap_fetch",
+            default_attempts=2,
+            default_delay=2
+        )
+        fetch_max_attempts = int(fetch_retry_config["max_attempts"])
+        fetch_base_delay = int(fetch_retry_config["base_delay_seconds"])
+        fetch_backoff_factor = float(fetch_retry_config["backoff_factor"])
+
         emails = []
-        # 正序遍历（从最近的邮件开始）
+        # 倒序遍历（从最近的邮件开始）
         for msg_id in msg_id_list:
             try:
-                # 获取邮件
-                typ, msg_data = mailbox.client.fetch(msg_id, '(RFC822)')
-                if typ != 'OK':
+                # 获取邮件（支持中断后重连重试）
+                msg_data = None
+                for fetch_attempt in range(1, fetch_max_attempts + 1):
+                    try:
+                        typ, msg_data = mailbox.client.fetch(msg_id, '(RFC822)')
+                        if typ != 'OK' or not msg_data:
+                            raise RuntimeError(f"FETCH返回异常: {typ}")
+                        break
+                    except Exception as fetch_error:
+                        logger.warning(
+                            f"抓取邮件失败（ID={msg_id.decode('utf-8', 'ignore')}，"
+                            f"第 {fetch_attempt}/{fetch_max_attempts} 次）: {str(fetch_error)}"
+                        )
+
+                        if fetch_attempt >= fetch_max_attempts:
+                            msg_data = None
+                            break
+
+                        if not self._is_transient_imap_error(fetch_error):
+                            msg_data = None
+                            break
+
+                        if not self._reconnect_mailbox_for_fetch(mailbox):
+                            msg_data = None
+                            break
+
+                        delay_seconds = self._get_retry_delay(
+                            fetch_attempt,
+                            fetch_base_delay,
+                            fetch_backoff_factor
+                        )
+                        logger.info(f"{delay_seconds} 秒后重试抓取邮件 ID={msg_id.decode('utf-8', 'ignore')}")
+                        time.sleep(delay_seconds)
+
+                if not msg_data:
                     continue
 
                 msg_bytes = msg_data[0][1]

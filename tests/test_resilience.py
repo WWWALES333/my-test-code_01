@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -135,6 +136,82 @@ class TestSchedulerResilience(unittest.TestCase):
             records = json.loads(run_log_path.read_text(encoding="utf-8"))
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0]["total_emails"], 1)
+
+    def _build_mail_bytes(self, subject: str, filename: str, date_header: str) -> bytes:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = "sender@example.com"
+        msg["Date"] = date_header
+        msg.set_content("test")
+        msg.add_attachment(
+            b"demo",
+            maintype="application",
+            subtype="octet-stream",
+            filename=filename
+        )
+        return msg.as_bytes()
+
+    def test_search_processes_latest_message_first(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._build_config(Path(temp_dir))
+            downloader = WeeklyReportDownloader(str(config_path))
+
+            mailbox = Mock()
+            mailbox.client = Mock()
+            mailbox.client.search.return_value = ("OK", [b"1 2"])
+
+            old_msg = self._build_mail_bytes(
+                subject="2026年1月第1周 将军汤 周报",
+                filename="2026年1月第1周将军汤工作周报.docx",
+                date_header="Sun, 04 Jan 2026 10:00:00 +0800"
+            )
+            new_msg = self._build_mail_bytes(
+                subject="2026年3月第2周 将军汤 周报",
+                filename="2026年3月第2周将军汤工作周报.docx",
+                date_header="Sun, 15 Mar 2026 10:00:00 +0800"
+            )
+
+            fetch_order = []
+
+            def fetch_side_effect(msg_id, _spec):
+                fetch_order.append(msg_id)
+                if msg_id == b"2":
+                    return ("OK", [(b"2", new_msg)])
+                return ("OK", [(b"1", old_msg)])
+
+            mailbox.client.fetch.side_effect = fetch_side_effect
+
+            emails = downloader.search_weekly_report_emails(mailbox)
+
+            self.assertEqual(fetch_order[:2], [b"2", b"1"])
+            self.assertGreaterEqual(len(emails), 2)
+
+    def test_search_reconnects_and_retries_on_fetch_eof(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._build_config(Path(temp_dir))
+            downloader = WeeklyReportDownloader(str(config_path))
+
+            mailbox = Mock()
+            mailbox.client = Mock()
+            mailbox.client.search.return_value = ("OK", [b"9"])
+
+            msg_bytes = self._build_mail_bytes(
+                subject="2026年3月第2周 将军汤 周报",
+                filename="2026年3月第2周将军汤工作周报.docx",
+                date_header="Sun, 15 Mar 2026 10:00:00 +0800"
+            )
+            mailbox.client.fetch.side_effect = [
+                RuntimeError("socket error: EOF occurred in violation of protocol"),
+                ("OK", [(b"9", msg_bytes)])
+            ]
+
+            with patch.object(downloader, "_reconnect_mailbox_for_fetch", return_value=True) as reconnect_mock:
+                with patch("src.main.time.sleep"):
+                    emails = downloader.search_weekly_report_emails(mailbox)
+
+            self.assertEqual(reconnect_mock.call_count, 1)
+            self.assertEqual(mailbox.client.fetch.call_count, 2)
+            self.assertEqual(len(emails), 1)
 
 
 if __name__ == "__main__":
