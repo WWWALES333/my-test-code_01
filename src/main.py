@@ -41,9 +41,11 @@ class WeeklyReportDownloader:
         self.config = self._load_config(config_path)
         self.download_history = self._load_history()
         self.run_log = self._create_run_log()
+        self._run_log_saved = False
 
     def _create_run_log(self) -> dict:
         """创建单次运行日志结构"""
+        self._run_log_saved = False
         return {
             "run_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "total_emails": 0,
@@ -54,6 +56,50 @@ class WeeklyReportDownloader:
             "integrity_summary": {},
             "audit_report": {}
         }
+
+    def _get_retry_config(self, retry_type: str, default_attempts: int, default_delay: int, default_backoff: float = 2.0) -> Dict[str, float]:
+        """读取重试配置并做边界保护"""
+        retry_root = self.config.get("retry", {})
+        retry_config = retry_root.get(retry_type, {}) if isinstance(retry_root, dict) else {}
+
+        max_attempts = retry_config.get("max_attempts", default_attempts)
+        base_delay = retry_config.get("base_delay_seconds", default_delay)
+        backoff_factor = retry_config.get("backoff_factor", default_backoff)
+
+        try:
+            max_attempts = max(1, int(max_attempts))
+        except (TypeError, ValueError):
+            max_attempts = default_attempts
+
+        try:
+            base_delay = max(1, int(base_delay))
+        except (TypeError, ValueError):
+            base_delay = default_delay
+
+        try:
+            backoff_factor = max(1.0, float(backoff_factor))
+        except (TypeError, ValueError):
+            backoff_factor = default_backoff
+
+        return {
+            "max_attempts": max_attempts,
+            "base_delay_seconds": base_delay,
+            "backoff_factor": backoff_factor
+        }
+
+    def _get_retry_delay(self, attempt: int, base_delay: int, backoff_factor: float) -> int:
+        """计算本次重试前等待秒数（指数退避）"""
+        return int(base_delay * (backoff_factor ** (attempt - 1)))
+
+    def _ensure_run_log_saved(self):
+        """确保运行日志已落盘，避免定时任务失败时无记录"""
+        if self._run_log_saved:
+            return
+
+        try:
+            self._save_run_log()
+        except Exception as e:
+            logger.error(f"保存运行日志失败: {str(e)}")
 
     def _load_config(self, config_path: str) -> dict:
         """加载配置文件"""
@@ -102,6 +148,7 @@ class WeeklyReportDownloader:
             os.makedirs(parent_dir, exist_ok=True)
         with open(log_file, 'w', encoding='utf-8') as f:
             json.dump(logs, f, ensure_ascii=False, indent=2)
+        self._run_log_saved = True
 
     def _format_week_folder(self, year: int, month: int, week: int) -> str:
         """格式化周报目录名"""
@@ -933,11 +980,36 @@ class WeeklyReportDownloader:
 
     def connect_mailbox(self) -> MailBox:
         """连接邮箱"""
-        logger.info(f"正在连接邮箱: {self.config['email']}")
-        mailbox = MailBox(self.config['imap_server'], self.config['imap_port'])
-        mailbox.login(self.config['email'], self.config['password'])
-        logger.info("邮箱连接成功")
-        return mailbox
+        retry_config = self._get_retry_config(
+            retry_type="imap",
+            default_attempts=3,
+            default_delay=5
+        )
+        max_attempts = int(retry_config["max_attempts"])
+        base_delay = int(retry_config["base_delay_seconds"])
+        backoff_factor = float(retry_config["backoff_factor"])
+
+        logger.info(
+            f"正在连接邮箱: {self.config['email']} "
+            f"(最多重试 {max_attempts} 次)"
+        )
+
+        last_error = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                mailbox = MailBox(self.config['imap_server'], self.config['imap_port'])
+                mailbox.login(self.config['email'], self.config['password'])
+                logger.info(f"邮箱连接成功（第 {attempt} 次）")
+                return mailbox
+            except Exception as e:
+                last_error = e
+                logger.warning(f"邮箱连接失败（第 {attempt}/{max_attempts} 次）: {str(e)}")
+                if attempt < max_attempts:
+                    delay_seconds = self._get_retry_delay(attempt, base_delay, backoff_factor)
+                    logger.info(f"{delay_seconds} 秒后重试邮箱连接")
+                    time.sleep(delay_seconds)
+
+        raise RuntimeError(f"邮箱连接失败，已重试 {max_attempts} 次: {str(last_error)}")
 
     def _get_mail_search_start(self) -> datetime:
         """获取邮箱检索起始时间，默认从 2026-01-01 开始"""
@@ -1918,18 +1990,37 @@ class WeeklyReportDownloader:
             }
         })
 
-        try:
-            response = requests.post(webhook_url, json=msg_content, timeout=10)
-            if response.status_code == 200:
+        retry_config = self._get_retry_config(
+            retry_type="notify",
+            default_attempts=4,
+            default_delay=5
+        )
+        max_attempts = int(retry_config["max_attempts"])
+        base_delay = int(retry_config["base_delay_seconds"])
+        backoff_factor = float(retry_config["backoff_factor"])
+
+        last_error = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = requests.post(webhook_url, json=msg_content, timeout=10)
+                if response.status_code != 200:
+                    raise RuntimeError(f"HTTP状态码异常: {response.status_code}")
+
                 result = response.json()
-                if result.get("code") == 0:
-                    logger.info("飞书通知发送成功")
-                else:
-                    logger.warning(f"飞书通知发送失败: {result.get('msg')}")
-            else:
-                logger.warning(f"飞书通知HTTP错误: {response.status_code}")
-        except Exception as e:
-            logger.warning(f"飞书通知发送失败: {str(e)}")
+                if result.get("code") != 0:
+                    raise RuntimeError(f"飞书返回错误: {result.get('msg')}")
+
+                logger.info(f"飞书通知发送成功（第 {attempt} 次）")
+                return
+            except Exception as e:
+                last_error = e
+                logger.warning(f"飞书通知发送失败（第 {attempt}/{max_attempts} 次）: {str(e)}")
+                if attempt < max_attempts:
+                    delay_seconds = self._get_retry_delay(attempt, base_delay, backoff_factor)
+                    logger.info(f"{delay_seconds} 秒后重试飞书通知")
+                    time.sleep(delay_seconds)
+
+        logger.error(f"飞书通知最终失败，已重试 {max_attempts} 次: {str(last_error)}")
 
     def run_download(self, report_type_filter: str = "all"):
         """执行下载任务（供定时调用）"""
@@ -1952,6 +2043,9 @@ class WeeklyReportDownloader:
         finally:
             # 恢复原始过滤设置
             self.config["report_type_filter"] = original_filter
+
+            # 若下载流程在早期异常退出，仍需确保运行日志落盘
+            self._ensure_run_log_saved()
 
             # 发送通知
             self.send_notification()
