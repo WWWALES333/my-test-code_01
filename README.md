@@ -1,5 +1,7 @@
 # 销售周报自动下载与分类系统
 
+当前封板版本：`V1.2`（2026-03-23）
+
 ## 项目结构
 
 ```text
@@ -37,3 +39,8 @@ python src/main.py -c data/input/config.json --once
 - 运行日志：`data/output/runtime/run_log.json`
 - 下载历史：`data/output/runtime/downloaded_history.json`
 - 审计报告：`data/output/audit/reports/`
+
+## 数据基线
+
+- 历史归档仅保留 `2023` 年及以后数据。
+- `2023` 年之前历史目录已清理，可按需重新拉取。
