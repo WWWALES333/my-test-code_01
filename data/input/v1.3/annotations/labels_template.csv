@@ -1,0 +1,25 @@
+sample_id,segment_id,is_ai_hit,business_line,ai_actor,decision_status,annotator,comment
+S001,S051,是,云诊室,待判断,pending_human_review,codex_prelabel,模型预标注：显式关键词: ai；云诊室关键词命中: 处方；主体关键词不足；待你审批
+S002,S002,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S003,S003,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S004,S004,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S005,S132,是,云诊室,待判断,pending_human_review,codex_prelabel,模型预标注：显式关键词: ai；云诊室关键词命中: 医生；主体关键词不足；待你审批
+S006,S041,是,云诊室,待判断,pending_human_review,codex_prelabel,"模型预标注：显式关键词: ai；云诊室关键词命中: 医生,问诊,开方；主体关键词不足；待你审批"
+S007,S114,是,云诊室,待判断,pending_human_review,codex_prelabel,"模型预标注：显式关键词: ai,ai诊疗；云诊室关键词命中: 医生；主体关键词不足；待你审批"
+S008,S008,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S009,S116,是,混合,销售对外介绍,confirmed,codex_prelabel,"模型预标注：显式关键词: ai；业务线双命中: 云管家,云诊室；销售对外介绍关键词命中: 介绍；待你审批"
+S010,S149,是,待判断,待判断,pending_human_review,codex_prelabel,模型预标注：显式关键词: ai；业务线关键词不足；主体关键词不足；待你审批
+S011,S070,是,待判断,销售自用,pending_human_review,codex_prelabel,"模型预标注：显式关键词: ai,人工智能；业务线关键词不足；销售自用关键词命中: 学习；待你审批"
+S012,S012,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S013,S013,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S014,S014,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S015,S015,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S016,S016,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S017,S017,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S018,S018,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S019,S019,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S020,S020,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S021,S019,是,待判断,销售自用,pending_human_review,codex_prelabel,"模型预标注：显式关键词: 人工智能,deepseek；业务线关键词不足；销售自用关键词命中: deepseek；待你审批"
+S022,S022,否,待判断,待判断,pending_human_review,codex_prelabel,当前跑数无AI命中片段，建议人工抽查确认
+S023,S015,是,云诊室,销售自用,confirmed,codex_prelabel,"模型预标注：显式关键词: 人工智能,deepseek；云诊室关键词命中: 医生；销售自用关键词命中: deepseek；待你审批"
+S024,S028,是,云诊室,潜在 AI 机会,confirmed,codex_prelabel,模型预标注：机会关键词: 资料整理；云诊室关键词命中: 医生；潜在 AI 机会关键词命中: 资料整理；待你审批
