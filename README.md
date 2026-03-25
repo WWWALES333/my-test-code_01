@@ -1,15 +1,16 @@
 # 销售周报自动下载与分类系统
 
-当前封板版本：`V1.2`（2026-03-23）
+当前封板版本：`V1.3`（2026-03-25）
 
-`v1.3` 版本文档已准备在 `docs/releases/v1.3/`，当前仍处于方案阶段。
+`v1.3` 已完成离线 AI 专题分析 MVP 封板，版本标签：`V1.3`。
 
 ## 项目结构
 
 ```text
 my-test-code_01/
 ├── src/                     # 核心业务代码
-│   └── main.py
+│   ├── main.py
+│   └── analysis_v13/        # v1.3 离线分析链路
 ├── docs/                    # 长期文档、版本文档、截图、参考资料
 │   ├── 01_business_context.md
 │   ├── 02_domain_glossary.md
@@ -22,8 +23,10 @@ my-test-code_01/
 │       └── v1.3/
 ├── data/
 │   ├── input/
-│   │   └── config.json      # 邮箱配置
+│   │   ├── config.json      # 邮箱配置
+│   │   └── v1.3/            # v1.3 标注基线与样本清单
 │   └── output/              # 程序运行产物（归档、日志、审计）
+│       └── insights/v1.3/   # v1.3 专题分析产物
 ├── tests/                   # 排查与测试脚本
 ├── requirements.txt
 ├── rules.md
@@ -39,9 +42,18 @@ pip install -r requirements.txt
 
 2. 修改 `data/input/config.json` 配置邮箱信息。
 
-3. 运行程序：
+3. 运行下载归档主链路（v1.2稳定链路）：
 ```bash
 python src/main.py -c data/input/config.json --once
+```
+
+4. 运行 v1.3 离线分析（冻结样本）：
+```bash
+python3 -m src.analysis_v13.run \
+  --samples data/input/v1.3/samples \
+  --annotations data/input/v1.3/annotations \
+  --out data/output/insights/v1.3 \
+  --model-mode mock
 ```
 
 ## 文档入口
@@ -52,7 +64,7 @@ python src/main.py -c data/input/config.json --once
 - 产品路书：`docs/10_product_roadmap.md`
 - 信息架构：`docs/11_information_architecture.md`
 - `v1.2` 归档文档：`docs/releases/v1.2/`
-- `v1.3` 方案文档：`docs/releases/v1.3/`
+- `v1.3` 封板文档：`docs/releases/v1.3/`
 
 ## 输出位置
 
@@ -60,6 +72,9 @@ python src/main.py -c data/input/config.json --once
 - 运行日志：`data/output/runtime/run_log.json`
 - 下载历史：`data/output/runtime/downloaded_history.json`
 - 审计报告：`data/output/audit/reports/`
+- `v1.3` 专题产物：
+  - `data/output/insights/v1.3/extracted/`
+  - `data/output/insights/v1.3/reports/`
 
 ## 数据基线
 
