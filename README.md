@@ -2,13 +2,24 @@
 
 当前封板版本：`V1.2`（2026-03-23）
 
+`v1.3` 版本文档已准备在 `docs/releases/v1.3/`，当前仍处于方案阶段。
+
 ## 项目结构
 
 ```text
 my-test-code_01/
 ├── src/                     # 核心业务代码
 │   └── main.py
-├── docs/                    # 文档、截图、参考资料
+├── docs/                    # 长期文档、版本文档、截图、参考资料
+│   ├── 01_business_context.md
+│   ├── 02_domain_glossary.md
+│   ├── 10_product_roadmap.md
+│   ├── 11_information_architecture.md
+│   ├── assets/
+│   ├── reference/
+│   └── releases/
+│       ├── v1.2/
+│       └── v1.3/
 ├── data/
 │   ├── input/
 │   │   └── config.json      # 邮箱配置
@@ -32,6 +43,16 @@ pip install -r requirements.txt
 ```bash
 python src/main.py -c data/input/config.json --once
 ```
+
+## 文档入口
+
+- 基线规则：`rules.md`
+- 业务背景：`docs/01_business_context.md`
+- 术语表：`docs/02_domain_glossary.md`
+- 产品路书：`docs/10_product_roadmap.md`
+- 信息架构：`docs/11_information_architecture.md`
+- `v1.2` 归档文档：`docs/releases/v1.2/`
+- `v1.3` 方案文档：`docs/releases/v1.3/`
 
 ## 输出位置
 

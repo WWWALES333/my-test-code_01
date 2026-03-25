@@ -26,3 +26,18 @@
 - 在编写或修改大量代码前，必须先用简短的中文向我解释你的**架构思路**和**修改计划**。
 - 得到我的同意后，再开始输出代码。
 - 代码输出完成后，用一句话总结你做了什么，并指导我如何运行测试。
+
+## 5. 文档基线与命名规范 (Documentation Rules)
+- 仓库的长期基线文档固定为：
+  - `rules.md`
+  - `docs/01_business_context.md`
+  - `docs/02_domain_glossary.md`
+  - `docs/10_product_roadmap.md`
+  - `docs/11_information_architecture.md`
+- 版本文档必须放在 `docs/releases/v1.2/`、`docs/releases/v1.3/` 等版本目录下，标准文件名固定为：
+  - `PRD.md`
+  - `tech_design.md`
+  - `test_plan.md`
+  - `change_log.md`
+- **禁止行为**：禁止在正式文档文件名中使用 `# `、`_new`、`_v2`、`_bak` 等临时命名。
+- **同步要求**：如果文档发生移动、重命名或归档，必须同步修正 `README.md`、基线文档和其他 Markdown 中的路径引用。
