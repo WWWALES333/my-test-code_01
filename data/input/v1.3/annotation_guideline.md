@@ -1,88 +1,86 @@
-# v1.3 标注规范
+# v1.3 标注规范（优化版）
 
 ## 1. 文档目的
-本文档用于统一 `v1.3` 首轮样本的标注和验收口径，确保产品、业务和研发对 AI 专题标签的理解一致。
+本文档用于统一 `v1.3` 样本的标注与验收口径，重点解决以下问题：
+- 单标签无法表达复合语义
+- 关键词直判导致语境误判
+- 宽泛表达缺少稳定归类口径
 
 ## 2. 标注对象
-首轮标注对象为：
 - 冻结样本集中的周报和月报
-- 文档中的可分析片段
-- 与 AI 专题相关的业务线、主体和不确定结果
+- 文档中的可分析片段（segment）
+- AI 专题相关的范围、业务线、主体、结果和不确定项
 
-## 3. 业务线标签定义
+## 3. 字段设计（主标签 + 扩展标签）
 
-### 3.1 云诊室
-片段主要围绕医生个人使用平台、线上问诊、接诊、复诊、开方、剂型和履约等内容。
+### 3.1 主兼容字段
+- `ai_actor`：兼容旧口径，值等于 `actor_primary`
+- `business_line`：`云诊室 | 云管家 | 混合 | 待判断`
+- `decision_status`：`confirmed | uncertain | pending_human_review`
 
-### 3.2 云管家
-片段主要围绕诊所经营、系统上线、功能使用、会员储值、SaaS 管理和经营提效等内容。
+### 3.2 新增字段
+- `actor_primary`：`销售自用 | 销售对外介绍 | 医生反馈 | 潜在 AI 机会`
+- `actor_subtype`：细分标签，允许 1-2 个值，使用 `;` 分隔
+- `ai_scope`：`product_ai | market_trend | competitor_ai | general_ai`
+- `interaction_outcome`：`no_feedback | positive_feedback | negative_or_observing | converted | not_applicable`
+- `certainty_level`：`high | medium | low`
 
-### 3.3 混合
-同一片段同时涉及云诊室和云管家，两条业务线都明显成立。
+## 4. AI 范围（ai_scope）判定
+- `product_ai`：与我方产品能力、销售动作、医生使用或产品机会直接相关
+- `market_trend`：行业政策、趋势、外部环境变化、AI 搜索线索
+- `competitor_ai`：竞品相关 AI 动态、竞品借 AI 形成竞争压力
+- `general_ai`：泛 AI 认知或个人思考，不构成明确业务动作
 
-### 3.4 待判断
-片段信息不足，无法可靠归入云诊室、云管家或混合。
+说明：
+- `market_trend` 与 `competitor_ai` 需要单独统计，不直接混入主业务 KPI。
 
-## 4. AI 主体标签定义
+## 5. 业务线（business_line）判定
+- 优先使用“片段内容信号 + 文档上下文先验（文件路径、客户类型）”联合判断
+- 仅有弱信号时允许 `混合` 或 `待判断`
+- 不允许为了凑标签强行落单边业务线
 
-### 4.1 销售自用
-销售把 AI 用在自己工作里，例如查资料、优化话术、学习、复盘、生成素材等。
+## 6. 主体（actor_primary / actor_subtype）判定
+- `actor_primary` 必须是单值，不允许写 `A / B`
+- 复合语义放到 `actor_subtype`，例如：
+  - `销售介绍后收到反馈`
+  - `销售介绍_无明确反馈`
+  - `客户AI搜索线索`
+  - `行业趋势观察`
+  - `竞品AI动态`
+  - `销售个人思考`
+  - `效率提效机会`
 
-### 4.2 销售对外介绍
-销售把 AI 当作平台能力、卖点或沟通话术，对医生或诊所进行介绍。
+## 7. 互动结果（interaction_outcome）判定
+- `no_feedback`：有介绍动作但未出现明确反馈
+- `positive_feedback`：出现兴趣、认可、正向态度
+- `negative_or_observing`：出现否定、观望、暂不接受
+- `converted`：出现明确转化或行为变化
+- `not_applicable`：不适用（如纯趋势观察）
 
-### 4.3 医生反馈
-医生或诊所管理者对 AI 能力的态度、顾虑、问题和建议。
+## 8. 不确定与复核
+- 允许输出 `pending_human_review`，不强行分类
+- `review_reason_code` 固定使用：
+  - `ACTOR_OVERLAP`
+  - `SCOPE_AMBIGUOUS`
+  - `BROAD_STATEMENT`
+  - `BUSINESSLINE_LOW_SIGNAL`
+  - `OUTCOME_UNCLEAR`
 
-### 4.4 潜在 AI 机会
-文本虽然没有明确写 AI，但从业务上判断，存在适合被 AI 优化的问题或场景。
+## 9. 标注记录格式
+每条标注至少包含：
+- `sample_id`
+- `segment_id`
+- `source_text`
+- `business_line`
+- `ai_actor` / `actor_primary` / `actor_subtype`
+- `ai_scope`
+- `interaction_outcome`
+- `certainty_level`
+- `decision_status`
+- `review_reason_code`
+- `review_comment`
 
-## 5. AI 提及判定规则
-满足以下任一条件，可判为 AI 提及：
-- 片段明确出现 AI、人工智能、智能问诊、智能小结、智能辅助诊疗、DeepSeek、ChatGPT 等表达
-- 片段明确讨论平台 AI 能力、AI 展示、AI 方案、AI 对外介绍
-- 片段明确描述销售或客户在实际使用 AI 工具
-
-仅出现“智能”“自动”“推荐”等泛化词汇，且没有明确 AI 语义时，不直接判为 AI 提及。
-
-## 6. 潜在 AI 机会判定规则
-满足以下特征时，可考虑标记为潜在 AI 机会：
-- 销售准备成本高、重复性整理工作重
-- 平台功能复杂、培训成本高、理解门槛高
-- 个性化沟通难、信息查询难、资料整理难
-- 医生或诊所明确提出希望更智能、更自动化的能力
-
-如果只是普通业务问题，且看不出 AI 介入价值，不应强行标记为潜在 AI 机会。
-
-## 7. 不确定 / 待人工确认判定规则
-以下情况必须允许进入“不确定 / 待人工确认”：
-- 片段确实提到 AI，但主体归属不稳定
-- 业务线信息不足，无法可靠判断
-- 潜在 AI 机会存在明显语义歧义
-- 同一片段包含多重主体，当前规则无法稳定拆分
-
-不允许为了保证标签完整而强行分类。
-
-## 8. 标注优先级与冲突处理
-- 先判断是否与 AI 专题相关
-- 再判断业务线
-- 再判断 AI 主体
-- 如果业务线或主体判断不稳定，优先标记为“待判断”或“不确定”
-- 混合内容优先于强行单边归类
-
-## 9. 标注记录格式建议
-每条标注记录建议至少包含：
-- 样本编号
-- 文档路径
-- 片段编号
-- 原文内容
-- 是否 AI 命中
-- 业务线标签
-- AI 主体标签
-- 是否不确定
-- 标注备注
-
-## 10. 标注记录落点
-- 首轮标注文件统一放在：`data/input/v1.3/annotations/`
-- 建议以 `labels_v1.csv` 作为首版人工标注结果文件
-- 可先使用 `labels_template.csv` 作为起始模板
+## 10. 文件落点
+- 主审批文件：`data/input/v1.3/annotations/labels_full_hits_review.csv`
+- 样本级模板：`data/input/v1.3/annotations/labels_template.csv`
+- 人工正式版（验收后）：`data/input/v1.3/annotations/labels_v1.csv`

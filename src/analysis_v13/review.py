@@ -17,6 +17,7 @@ def build_review_queue_from_tags(tag_rows: List[Dict[str, object]]) -> List[Dict
                 "report_id": row["report_id"],
                 "segment_id": row["segment_id"],
                 "review_reason": review_reason,
+                "review_reason_code": row.get("review_reason_code", ""),
                 "decision_status": row["decision_status"],
                 "source_text": row["source_text"],
                 "file_path": row["file_path"],
@@ -31,6 +32,7 @@ def build_review_item_for_parse_failure(report_row: Dict[str, object], reason: s
         "report_id": report_row["report_id"],
         "segment_id": "",
         "review_reason": f"解析失败: {reason}",
+        "review_reason_code": "PARSE_FAILED",
         "decision_status": "pending_human_review",
         "source_text": "",
         "file_path": report_row["file_path"],
@@ -38,12 +40,18 @@ def build_review_item_for_parse_failure(report_row: Dict[str, object], reason: s
 
 
 def _infer_review_reason(tag_row: Dict[str, object]) -> str:
-    reasons = []
-    if tag_row["business_line"] == "待判断":
-        reasons.append("业务线不稳定")
-    if tag_row["ai_actor"] == "待判断":
-        reasons.append("主体不稳定")
-    if tag_row["decision_status"] == "uncertain":
-        reasons.append("置信度不足")
-    return "；".join(reasons) if reasons else "建议人工复核"
+    code_text = str(tag_row.get("review_reason_code", ""))
+    codes = [c for c in code_text.split(";") if c]
+    if not codes:
+        return "建议人工复核"
 
+    code_map = {
+        "ACTOR_OVERLAP": "主体复合或归属不稳定",
+        "SCOPE_AMBIGUOUS": "范围口径不稳定",
+        "BROAD_STATEMENT": "表达宽泛，需人工确认",
+        "BUSINESSLINE_LOW_SIGNAL": "业务线信号不足",
+        "OUTCOME_UNCLEAR": "互动结果不清晰",
+        "PARSE_FAILED": "解析失败",
+    }
+    reasons = [code_map.get(code, code) for code in codes]
+    return "；".join(reasons)

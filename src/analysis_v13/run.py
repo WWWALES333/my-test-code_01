@@ -65,7 +65,7 @@ def run_pipeline(samples_dir: Path, annotations_dir: Path, out_dir: Path, model_
 
         for idx, segment in enumerate(segments, start=1):
             segment_id = f"S{idx:03d}"
-            cls = tagger.classify(segment)
+            cls = tagger.classify(segment, context=report_row)
             if cls["decision_status"] not in DECISION_VALUES:
                 raise ValueError(f"非法 decision_status: {cls['decision_status']}")
 
@@ -80,6 +80,12 @@ def run_pipeline(samples_dir: Path, annotations_dir: Path, out_dir: Path, model_
                 "is_ai_hit": cls["is_ai_hit"],
                 "business_line": cls["business_line"],
                 "ai_actor": cls["ai_actor"],
+                "actor_primary": cls["actor_primary"],
+                "actor_subtype": cls["actor_subtype"],
+                "ai_scope": cls["ai_scope"],
+                "interaction_outcome": cls["interaction_outcome"],
+                "certainty_level": cls["certainty_level"],
+                "review_reason_code": cls["review_reason_code"],
                 "decision_status": cls["decision_status"],
                 "confidence": cls["confidence"],
                 "reason": cls["reason"],
@@ -97,6 +103,11 @@ def run_pipeline(samples_dir: Path, annotations_dir: Path, out_dir: Path, model_
                         "source_text": segment,
                         "business_line": cls["business_line"],
                         "ai_actor": cls["ai_actor"],
+                        "actor_primary": cls["actor_primary"],
+                        "actor_subtype": cls["actor_subtype"],
+                        "ai_scope": cls["ai_scope"],
+                        "interaction_outcome": cls["interaction_outcome"],
+                        "certainty_level": cls["certainty_level"],
                         "file_path": report_row["file_path"],
                     }
                 )
@@ -132,9 +143,16 @@ def strip_tag_rows(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
                 "is_ai_hit": row["is_ai_hit"],
                 "business_line": row["business_line"],
                 "ai_actor": row["ai_actor"],
+                "actor_primary": row["actor_primary"],
+                "actor_subtype": row["actor_subtype"],
+                "ai_scope": row["ai_scope"],
+                "interaction_outcome": row["interaction_outcome"],
+                "certainty_level": row["certainty_level"],
+                "review_reason_code": row["review_reason_code"],
                 "decision_status": row["decision_status"],
                 "confidence": row["confidence"],
                 "reason": row["reason"],
+                "file_path": row["file_path"],
             }
         )
     return kept
@@ -152,6 +170,7 @@ def write_review_csv(path: Path, rows: List[Dict[str, object]]) -> None:
         "report_id",
         "segment_id",
         "review_reason",
+        "review_reason_code",
         "decision_status",
         "source_text",
         "file_path",
@@ -180,4 +199,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
