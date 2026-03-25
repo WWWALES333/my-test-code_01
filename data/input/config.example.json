@@ -1,0 +1,58 @@
+{
+  "imap_server": "imap.example.com",
+  "imap_port": 993,
+  "email": "your-email@example.com",
+  "password": "REPLACE_WITH_APP_PASSWORD",
+  "output_root": "data/output/sales_reports/06 销售周报",
+  "region_keywords": [
+    "一战区",
+    "二战区",
+    "三战区",
+    "四战区",
+    "五战区",
+    "六战区",
+    "七战区",
+    "线上战区",
+    "云管家",
+    "将军汤",
+    "天雄汤"
+  ],
+  "download_history_file": "data/output/runtime/downloaded_history.json",
+  "log_file": "data/output/runtime/run_log.json",
+  "mail_search": {
+    "start_date": "2026-01-01"
+  },
+  "date_filter": {
+    "enabled": false
+  },
+  "report_type_filter": "all",
+  "scheduler": {
+    "enabled": true,
+    "weekly_day": 1,
+    "monthly_day": 1,
+    "hour": 9,
+    "minute": 0
+  },
+  "notify": {
+    "enabled": false,
+    "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_WITH_WEBHOOK",
+    "type": "feishu"
+  },
+  "retry": {
+    "imap": {
+      "max_attempts": 3,
+      "base_delay_seconds": 5,
+      "backoff_factor": 2
+    },
+    "imap_fetch": {
+      "max_attempts": 2,
+      "base_delay_seconds": 2,
+      "backoff_factor": 2
+    },
+    "notify": {
+      "max_attempts": 4,
+      "base_delay_seconds": 5,
+      "backoff_factor": 2
+    }
+  }
+}

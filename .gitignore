@@ -36,3 +36,12 @@ system.log
 # 临时文件
 *.tmp
 *.bak
+
+# 本地敏感配置（禁止入库）
+data/input/config.json
+.claude/settings.local.json
+.env
+.env.*
+
+# 本地备份
+.backup/

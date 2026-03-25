@@ -41,3 +41,10 @@
   - `change_log.md`
 - **禁止行为**：禁止在正式文档文件名中使用 `# `、`_new`、`_v2`、`_bak` 等临时命名。
 - **同步要求**：如果文档发生移动、重命名或归档，必须同步修正 `README.md`、基线文档和其他 Markdown 中的路径引用。
+
+## 6. 敏感信息与发布安全规范 (Security Rules)
+- **敏感文件禁止入库**：`data/input/config.json`、`.claude/settings.local.json`、`.env*` 仅允许本地使用，禁止提交到 Git。
+- **模板化原则**：共享配置必须提供脱敏模板（如 `data/input/config.example.json`），真实口令、Webhook、Token 不得写入仓库。
+- **提交前强校验**：启用仓库钩子后，每次提交自动执行 `python3 tests/check_no_secrets.py`；命中风险必须阻断提交。
+- **发布前强校验**：任何封板或发布前，必须手动执行 `python3 tests/check_no_secrets.py` 并确保返回 `[PASS]`。
+- **泄漏应急处理**：一旦发现凭据曾入库，需立即轮换邮箱密码、Webhook、Token 等相关凭据。

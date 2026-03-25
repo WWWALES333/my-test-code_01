@@ -23,7 +23,8 @@ my-test-code_01/
 │       └── v1.3/
 ├── data/
 │   ├── input/
-│   │   ├── config.json      # 邮箱配置
+│   │   ├── config.example.json  # 配置模板（可提交）
+│   │   ├── config.json          # 本地私有配置（已忽略，不提交）
 │   │   └── v1.3/            # v1.3 标注基线与样本清单
 │   └── output/              # 程序运行产物（归档、日志、审计）
 │       └── insights/v1.3/   # v1.3 专题分析产物
@@ -40,14 +41,19 @@ my-test-code_01/
 pip install -r requirements.txt
 ```
 
-2. 修改 `data/input/config.json` 配置邮箱信息。
+2. 初始化本地配置：
+```bash
+cp data/input/config.example.json data/input/config.json
+```
 
-3. 运行下载归档主链路（v1.2稳定链路）：
+3. 修改 `data/input/config.json` 配置邮箱信息。
+
+4. 运行下载归档主链路（v1.2稳定链路）：
 ```bash
 python src/main.py -c data/input/config.json --once
 ```
 
-4. 运行 v1.3 离线分析（冻结样本）：
+5. 运行 v1.3 离线分析（冻结样本）：
 ```bash
 python3 -m src.analysis_v13.run \
   --samples data/input/v1.3/samples \
@@ -55,6 +61,20 @@ python3 -m src.analysis_v13.run \
   --out data/output/insights/v1.3 \
   --model-mode mock
 ```
+
+## 安全发布检查（必做）
+
+1. 一次性启用仓库 pre-commit 钩子：
+```bash
+git config core.hooksPath .githooks
+```
+
+2. 发布前执行敏感信息检查：
+```bash
+python3 tests/check_no_secrets.py
+```
+
+检查结果必须为 `[PASS]` 才允许发布到 GitHub。
 
 ## 文档入口
 
