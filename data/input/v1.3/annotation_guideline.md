@@ -81,3 +81,8 @@
 - AI 主体标签
 - 是否不确定
 - 标注备注
+
+## 10. 标注记录落点
+- 首轮标注文件统一放在：`data/input/v1.3/annotations/`
+- 建议以 `labels_v1.csv` 作为首版人工标注结果文件
+- 可先使用 `labels_template.csv` 作为起始模板

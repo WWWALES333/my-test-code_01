@@ -1,0 +1,183 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+from pathlib import Path
+from typing import Dict, Iterable, List
+
+from .loader import build_report_record, collect_sample_files
+from .parser import extract_text, segment_text
+from .reporter import build_summary_markdown, write_markdown
+from .review import build_review_item_for_parse_failure, build_review_queue_from_tags
+from .schema import (
+    DECISION_VALUES,
+    stable_hash,
+)
+from .tagger import Tagger
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="v1.3 AI 专题离线分析入口")
+    parser.add_argument("--samples", required=True, help="样本目录路径")
+    parser.add_argument("--annotations", required=True, help="标注目录路径")
+    parser.add_argument("--out", required=True, help="输出目录路径")
+    parser.add_argument("--model-mode", choices=["mock", "real"], default="mock", help="模型模式")
+    return parser.parse_args()
+
+
+def ensure_input_dirs(samples_dir: Path, annotations_dir: Path) -> None:
+    if not samples_dir.exists():
+        raise FileNotFoundError(f"样本目录不存在: {samples_dir}")
+    annotations_dir.mkdir(parents=True, exist_ok=True)
+
+
+def run_pipeline(samples_dir: Path, annotations_dir: Path, out_dir: Path, model_mode: str) -> Dict[str, int]:
+    ensure_input_dirs(samples_dir, annotations_dir)
+    sample_files = collect_sample_files(samples_dir)
+    if not sample_files:
+        raise RuntimeError(f"样本目录为空: {samples_dir}")
+
+    extracted_dir = out_dir / "extracted"
+    report_dir = out_dir / "reports"
+    extracted_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    tagger = Tagger(mode=model_mode)
+
+    report_rows: List[Dict[str, object]] = []
+    tag_rows: List[Dict[str, object]] = []
+    evidence_rows: List[Dict[str, object]] = []
+    parse_failure_reviews: List[Dict[str, object]] = []
+
+    for path in sample_files:
+        report_row = build_report_record(path)
+        text, parse_error = extract_text(path)
+        segments = segment_text(text) if not parse_error else []
+
+        report_row["text_status"] = "failed" if parse_error else "success"
+        report_row["segment_count"] = len(segments)
+        report_rows.append(report_row)
+
+        if parse_error:
+            parse_failure_reviews.append(build_review_item_for_parse_failure(report_row, parse_error))
+            continue
+
+        for idx, segment in enumerate(segments, start=1):
+            segment_id = f"S{idx:03d}"
+            cls = tagger.classify(segment)
+            if cls["decision_status"] not in DECISION_VALUES:
+                raise ValueError(f"非法 decision_status: {cls['decision_status']}")
+
+            if not cls["is_ai_hit"] and cls["decision_status"] == "confirmed":
+                continue
+
+            tag_id = stable_hash(str(report_row["report_id"]), segment_id, segment)
+            tag_row = {
+                "tag_id": tag_id,
+                "report_id": report_row["report_id"],
+                "segment_id": segment_id,
+                "is_ai_hit": cls["is_ai_hit"],
+                "business_line": cls["business_line"],
+                "ai_actor": cls["ai_actor"],
+                "decision_status": cls["decision_status"],
+                "confidence": cls["confidence"],
+                "reason": cls["reason"],
+                "source_text": segment,
+                "file_path": report_row["file_path"],
+            }
+            tag_rows.append(tag_row)
+
+            if cls["is_ai_hit"]:
+                evidence_rows.append(
+                    {
+                        "evidence_id": stable_hash(str(report_row["report_id"]), segment_id, "evidence"),
+                        "report_id": report_row["report_id"],
+                        "segment_id": segment_id,
+                        "source_text": segment,
+                        "business_line": cls["business_line"],
+                        "ai_actor": cls["ai_actor"],
+                        "file_path": report_row["file_path"],
+                    }
+                )
+
+    review_rows = build_review_queue_from_tags(tag_rows)
+    review_rows.extend(parse_failure_reviews)
+
+    write_jsonl(extracted_dir / "report_index.jsonl", report_rows)
+    write_jsonl(extracted_dir / "tag_result.jsonl", strip_tag_rows(tag_rows))
+    write_jsonl(extracted_dir / "evidence_span.jsonl", evidence_rows)
+    write_jsonl(extracted_dir / "review_queue.jsonl", review_rows)
+    write_review_csv(report_dir / "review_queue.csv", review_rows)
+
+    summary = build_summary_markdown(report_rows, tag_rows, evidence_rows, review_rows)
+    write_markdown(report_dir / "AI专题摘要.md", summary)
+
+    return {
+        "reports": len(report_rows),
+        "tag_rows": len(tag_rows),
+        "evidence_rows": len(evidence_rows),
+        "review_rows": len(review_rows),
+    }
+
+
+def strip_tag_rows(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    kept: List[Dict[str, object]] = []
+    for row in rows:
+        kept.append(
+            {
+                "tag_id": row["tag_id"],
+                "report_id": row["report_id"],
+                "segment_id": row["segment_id"],
+                "is_ai_hit": row["is_ai_hit"],
+                "business_line": row["business_line"],
+                "ai_actor": row["ai_actor"],
+                "decision_status": row["decision_status"],
+                "confidence": row["confidence"],
+                "reason": row["reason"],
+            }
+        )
+    return kept
+
+
+def write_jsonl(path: Path, rows: Iterable[Dict[str, object]]) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def write_review_csv(path: Path, rows: List[Dict[str, object]]) -> None:
+    fieldnames = [
+        "review_id",
+        "report_id",
+        "segment_id",
+        "review_reason",
+        "decision_status",
+        "source_text",
+        "file_path",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
+
+
+def main() -> None:
+    args = parse_args()
+    result = run_pipeline(
+        samples_dir=Path(args.samples),
+        annotations_dir=Path(args.annotations),
+        out_dir=Path(args.out),
+        model_mode=args.model_mode,
+    )
+    print(
+        "v1.3 分析完成: reports={reports}, tags={tag_rows}, evidence={evidence_rows}, review={review_rows}".format(
+            **result
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
+
