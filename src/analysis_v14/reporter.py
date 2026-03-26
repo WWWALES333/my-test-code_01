@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -626,3 +627,384 @@ def _aggregate_period_rows(
         row["ai_report_rate"] = f"{(ai_reports / reports * 100):.1f}%" if reports else "0.0%"
         rows.append(row)
     return rows
+
+
+def build_dashboard_html(
+    report_rows: List[Dict[str, object]],
+    tag_rows: List[Dict[str, object]],
+    evidence_rows: List[Dict[str, object]],
+    review_rows: List[Dict[str, object]],
+    business_tables: Dict[str, List[Dict[str, object]]],
+    run_meta: Dict[str, str] | None = None,
+) -> str:
+    report_map = {str(r["report_id"]): r for r in report_rows}
+    ai_hits = [r for r in tag_rows if bool(r["is_ai_hit"])]
+    confirmed_ai_hits = [r for r in ai_hits if str(r.get("decision_status", "")) == "confirmed"]
+    pending_ai_hits = [r for r in ai_hits if str(r.get("decision_status", "")) in {"uncertain", "pending_human_review"}]
+    actor_counter = Counter(str(r.get("actor_primary", "待判断")) for r in confirmed_ai_hits)
+    line_counter = Counter(str(r.get("business_line", "待判断")) for r in confirmed_ai_hits)
+    review_reason_counter = Counter()
+    for row in review_rows:
+        for code in str(row.get("review_reason_code", "")).split(";"):
+            if code:
+                review_reason_counter[code] += 1
+
+    parse_status_counter = Counter(str(r.get("parse_status", r.get("text_status", "unknown"))) for r in report_rows)
+    quality_status, quality_reason = _evaluate_quality(
+        report_count=len(report_rows),
+        parse_failed_count=parse_status_counter.get("failed", 0),
+        ai_hit_count=len(ai_hits),
+        pending_count=len(pending_ai_hits),
+    )
+    trend = _build_year_trend(report_map, ai_hits)
+
+    monthly_rows_all = business_tables.get("dashboard_monthly", [])
+    monthly_rows = [r for r in monthly_rows_all if int(r.get("year", 0)) >= 2025]
+    monthly_rows = sorted(monthly_rows, key=lambda r: (int(r.get("year", 0)), int(r.get("month", 0))))
+    max_month_mentions = max([int(r.get("ai_mentions", 0)) for r in monthly_rows], default=1)
+
+    opportunity_rows = business_tables.get("opportunity_backlog", [])[:20]
+    review_rows_top = business_tables.get("review_worklist", [])[:20]
+    evidence_rows_top = business_tables.get("evidence_trace", [])[:30]
+
+    cards = [
+        ("处理文档", str(len(report_rows)), "本轮扫描到的周报/月报总量"),
+        ("AI命中", str(len(ai_hits)), "提及AI的片段总数"),
+        ("已确认", str(len(confirmed_ai_hits)), "可直接参考的片段"),
+        ("待复核", str(len(review_rows)), "需要业务人工确认"),
+        ("解析成功率", _ratio(parse_status_counter.get("success", 0), len(report_rows)).split(" ")[0], "文档解析可用性"),
+        ("试运行状态", quality_status, quality_reason),
+    ]
+
+    actor_bar = _render_bar_list(actor_counter, max_items=6)
+    line_bar = _render_bar_list(line_counter, max_items=6)
+    review_bar = _render_bar_list(review_reason_counter, max_items=8)
+    monthly_table = _render_monthly_rows(monthly_rows, max_month_mentions)
+    opp_table = _render_generic_table(
+        rows=opportunity_rows,
+        columns=[
+            ("year", "年"),
+            ("month", "月"),
+            ("owner_hint", "销售/战区"),
+            ("ai_scope", "范围"),
+            ("actor_primary", "主体"),
+            ("source_text", "原文片段"),
+        ],
+    )
+    review_table = _render_generic_table(
+        rows=review_rows_top,
+        columns=[
+            ("year", "年"),
+            ("month", "月"),
+            ("owner_hint", "销售/战区"),
+            ("review_priority", "优先级"),
+            ("review_reason_code", "原因码"),
+            ("source_text", "待确认片段"),
+        ],
+    )
+    trace_table = _render_generic_table(
+        rows=evidence_rows_top,
+        columns=[
+            ("year", "年"),
+            ("month", "月"),
+            ("owner_hint", "销售/战区"),
+            ("ai_scope", "范围"),
+            ("actor_primary", "主体"),
+            ("source_text", "证据原文"),
+        ],
+    )
+
+    trend_html = ""
+    if trend.get("has_compare"):
+        trend_html = (
+            f"<p><strong>同比趋势（{trend['year_a']} 同期 {trend['compare_months']}月 vs {trend['year_b']} 同期）</strong></p>"
+            f"<p>AI提及片段：{trend['ai_mentions_a']} → {trend['ai_mentions_b']}（{trend['ai_mentions_change_text']}）</p>"
+            f"<p>提及主体数：{trend['sales_entities_a']} → {trend['sales_entities_b']}（{trend['sales_entities_change_text']}）</p>"
+        )
+    else:
+        trend_html = "<p>当前缺少可比年度数据，暂无法自动给出同比趋势。</p>"
+
+    run_id = html.escape(str((run_meta or {}).get("run_id", "")))
+    samples_dir = html.escape(str((run_meta or {}).get("samples_dir", "")))
+    model_mode = html.escape(str((run_meta or {}).get("model_mode", "")))
+
+    card_html = "".join(
+        [
+            (
+                "<div class='card'>"
+                f"<div class='k'>{html.escape(title)}</div>"
+                f"<div class='v'>{html.escape(value)}</div>"
+                f"<div class='d'>{html.escape(desc)}</div>"
+                "</div>"
+            )
+            for title, value, desc in cards
+        ]
+    )
+
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI专题看板 - v1.4</title>
+  <style>
+    :root {{
+      --bg1:#f4f8ff;
+      --bg2:#f9f3ea;
+      --card:#ffffff;
+      --ink:#1f2a37;
+      --muted:#5f6b7a;
+      --line:#d9e0ea;
+      --brand:#2266dd;
+      --accent:#e58a2b;
+      --good:#138a43;
+      --warn:#a25f00;
+    }}
+    *{{box-sizing:border-box}}
+    body {{
+      margin:0;
+      font-family:"PingFang SC","Noto Sans SC","Helvetica Neue",sans-serif;
+      color:var(--ink);
+      background:linear-gradient(140deg,var(--bg1),var(--bg2));
+    }}
+    .wrap {{
+      max-width:1280px;
+      margin:0 auto;
+      padding:24px 28px 48px;
+    }}
+    .hero {{
+      background:linear-gradient(120deg,#0f2f6b,#15419a);
+      color:#fff;
+      border-radius:16px;
+      padding:24px;
+      box-shadow:0 12px 28px rgba(15,47,107,.2);
+    }}
+    .hero h1 {{
+      margin:0 0 8px;
+      font-size:30px;
+      letter-spacing:.5px;
+    }}
+    .hero p {{margin:4px 0;color:#dce7ff}}
+    .meta {{
+      margin-top:8px;
+      font-size:13px;
+      color:#bfd2ff;
+      word-break:break-all;
+    }}
+    .grid {{
+      margin-top:18px;
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:12px;
+    }}
+    .card {{
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:14px 16px;
+      box-shadow:0 4px 12px rgba(15,47,107,.06);
+    }}
+    .k {{font-size:13px;color:var(--muted)}}
+    .v {{font-size:28px;font-weight:700;margin-top:6px}}
+    .d {{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.4}}
+    .section {{
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius:14px;
+      margin-top:16px;
+      padding:16px;
+    }}
+    .section h2 {{
+      margin:0 0 10px;
+      font-size:18px;
+      color:#102a52;
+    }}
+    .two {{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:14px;
+    }}
+    .barlist {{display:grid;gap:8px}}
+    .barrow {{display:grid;grid-template-columns:120px 1fr 52px;gap:8px;align-items:center}}
+    .barlabel {{font-size:13px;color:#2a3a4f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+    .bartrack {{height:10px;background:#edf2fb;border-radius:20px;overflow:hidden}}
+    .bar {{height:100%;background:linear-gradient(90deg,var(--brand),#55a1ff)}}
+    .barvalue {{font-size:12px;color:var(--muted);text-align:right}}
+    table {{
+      width:100%;
+      border-collapse:collapse;
+      font-size:13px;
+    }}
+    th,td {{
+      border-bottom:1px solid var(--line);
+      padding:8px 10px;
+      text-align:left;
+      vertical-align:top;
+    }}
+    th {{background:#f7f9fd;color:#24364f;position:sticky;top:0}}
+    .table-wrap {{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:10px}}
+    .chip {{
+      display:inline-block;
+      font-size:12px;
+      border-radius:999px;
+      padding:2px 8px;
+      background:#eef3ff;
+      color:#2558b7;
+      margin-right:6px;
+    }}
+    .ok {{color:var(--good)}}
+    .warn {{color:var(--warn)}}
+    .monthbar {{
+      height:8px;border-radius:999px;background:#eef2f9;overflow:hidden;min-width:120px
+    }}
+    .monthbar > span {{
+      display:block;height:100%;background:linear-gradient(90deg,var(--accent),#ffd08f)
+    }}
+    @media (max-width: 960px) {{
+      .grid {{grid-template-columns:1fr 1fr}}
+      .two {{grid-template-columns:1fr}}
+      .barrow {{grid-template-columns:100px 1fr 46px}}
+    }}
+    @media (max-width: 640px) {{
+      .wrap {{padding:14px}}
+      .grid {{grid-template-columns:1fr}}
+      .hero h1 {{font-size:24px}}
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <h1>AI专题业务看板（v1.4）</h1>
+      <p>面向产品与销售管理的试运行报告：现状、趋势、机会、复核闭环</p>
+      <div class="meta">run_id={run_id} ｜ model_mode={model_mode} ｜ samples={samples_dir}</div>
+    </div>
+
+    <div class="grid">{card_html}</div>
+
+    <div class="section">
+      <h2>趋势结论</h2>
+      {trend_html}
+      <p class="meta">说明：同比按“2026已覆盖月份”回看 2025 同期，避免跨月误读。</p>
+    </div>
+
+    <div class="two">
+      <div class="section">
+        <h2>主体分布（已确认）</h2>
+        <div class="barlist">{actor_bar}</div>
+      </div>
+      <div class="section">
+        <h2>业务线分布（已确认）</h2>
+        <div class="barlist">{line_bar}</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>月度趋势看板（2025+）</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>月份</th><th>文档数</th><th>AI命中</th><th>AI覆盖率</th><th>已确认</th><th>待复核</th><th>趋势条</th></tr>
+          </thead>
+          <tbody>
+            {monthly_table}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>机会池（可反哺业务）</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>年</th><th>月</th><th>销售/战区</th><th>范围</th><th>主体</th><th>原文片段</th></tr></thead>
+          <tbody>{opp_table}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>复核工作台</h2>
+      <p><span class="chip">总待复核 {len(review_rows)}</span><span class="chip">中高优先级 {sum(1 for r in review_rows if str(r.get('review_priority','')) in ('high','medium'))}</span></p>
+      <div class="barlist">{review_bar}</div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table>
+          <thead><tr><th>年</th><th>月</th><th>销售/战区</th><th>优先级</th><th>原因码</th><th>待确认片段</th></tr></thead>
+          <tbody>{review_table}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>证据溯源（前30条）</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>年</th><th>月</th><th>销售/战区</th><th>范围</th><th>主体</th><th>证据原文</th></tr></thead>
+          <tbody>{trace_table}</tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
+
+
+def _render_bar_list(counter: Counter, max_items: int) -> str:
+    if not counter:
+        return "<div class='meta'>暂无数据</div>"
+    top_items = counter.most_common(max_items)
+    max_value = max(v for _, v in top_items) if top_items else 1
+    chunks: List[str] = []
+    for label, value in top_items:
+        width = 0 if max_value <= 0 else int(value / max_value * 100)
+        chunks.append(
+            "<div class='barrow'>"
+            f"<div class='barlabel'>{html.escape(str(label))}</div>"
+            f"<div class='bartrack'><div class='bar' style='width:{width}%'></div></div>"
+            f"<div class='barvalue'>{value}</div>"
+            "</div>"
+        )
+    return "".join(chunks)
+
+
+def _render_monthly_rows(rows: List[Dict[str, object]], max_month_mentions: int) -> str:
+    if not rows:
+        return "<tr><td colspan='7'>暂无数据</td></tr>"
+    rendered: List[str] = []
+    for r in rows:
+        year = int(r.get("year", 0))
+        month = int(r.get("month", 0))
+        reports = int(r.get("reports", 0))
+        mentions = int(r.get("ai_mentions", 0))
+        confirmed = int(r.get("confirmed_mentions", 0))
+        pending = int(r.get("pending_mentions", 0))
+        rate = str(r.get("ai_report_rate", "0.0%"))
+        width = 0 if max_month_mentions <= 0 else int(mentions / max_month_mentions * 100)
+        rendered.append(
+            "<tr>"
+            f"<td>{year}-{month:02d}</td>"
+            f"<td>{reports}</td>"
+            f"<td>{mentions}</td>"
+            f"<td>{html.escape(rate)}</td>"
+            f"<td>{confirmed}</td>"
+            f"<td>{pending}</td>"
+            f"<td><div class='monthbar'><span style='width:{width}%'></span></div></td>"
+            "</tr>"
+        )
+    return "".join(rendered)
+
+
+def _render_generic_table(rows: List[Dict[str, object]], columns: List[Tuple[str, str]]) -> str:
+    if not rows:
+        return f"<tr><td colspan='{len(columns)}'>暂无数据</td></tr>"
+    rendered: List[str] = []
+    for row in rows:
+        cells: List[str] = []
+        for key, _ in columns:
+            val = row.get(key, "")
+            text = html.escape(str(val))
+            if key in {"source_text"} and len(text) > 180:
+                text = text[:180] + "..."
+            cells.append(f"<td>{text}</td>")
+        rendered.append("<tr>" + "".join(cells) + "</tr>")
+    return "".join(rendered)

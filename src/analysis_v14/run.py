@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List
 
 from .loader import build_report_record, collect_sample_files
 from .parser import extract_text, segment_text
-from .reporter import build_business_tables, build_summary_markdown, write_markdown
+from .reporter import build_business_tables, build_dashboard_html, build_summary_markdown, write_markdown
 from .review import build_review_item_for_parse_failure, build_review_queue_from_tags
 from .schema import (
     DECISION_VALUES,
@@ -175,6 +175,20 @@ def run_pipeline(samples_dir: Path, annotations_dir: Path, out_dir: Path, model_
     write_csv_rows(report_dir / "opportunity_backlog.csv", business_tables["opportunity_backlog"])
     write_csv_rows(report_dir / "evidence_trace.csv", business_tables["evidence_trace"])
     write_csv_rows(report_dir / "review_worklist.csv", business_tables["review_worklist"])
+    dashboard_html = build_dashboard_html(
+        report_rows=report_rows,
+        tag_rows=tag_rows,
+        evidence_rows=evidence_rows,
+        review_rows=review_rows,
+        business_tables=business_tables,
+        run_meta={
+            "run_id": run_id,
+            "model_mode": model_mode,
+            "model_name": default_model_name,
+            "samples_dir": str(samples_dir.resolve()),
+        },
+    )
+    write_markdown(report_dir / "AI专题看板.html", dashboard_html)
 
     return {
         "run_id": run_id,
