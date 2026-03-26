@@ -43,6 +43,11 @@ class TestAnalysisV14(unittest.TestCase):
             self.assertTrue((reports / "AI专题摘要.md").exists())
             self.assertTrue((review / "review_queue.csv").exists())
             self.assertTrue((review / "review_result_template.csv").exists())
+            summary_text = (reports / "AI专题摘要.md").read_text(encoding="utf-8")
+            self.assertIn("一页结论（先给业务看）", summary_text)
+            self.assertIn("给产品负责人的重点", summary_text)
+            self.assertIn("给销售管理者的重点", summary_text)
+            self.assertIn("系统自测结果（本轮自动验收）", summary_text)
 
             report_lines = (extracted / "report_index.jsonl").read_text(encoding="utf-8").strip().splitlines()
             report_row = json.loads(report_lines[0])
