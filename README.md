@@ -1,7 +1,7 @@
 # 销售周报自动下载与分类系统
 
-当前封板版本：`V1.2`（2026-03-23）
-当前开发版本：`v1.4`（AI专题试运行版，离线开发中）
+当前封板版本：`V1.4`（2026-03-26）
+下一开发版本：`v1.5`（规划中）
 
 ## 项目结构
 
@@ -88,7 +88,7 @@ python3 tests/check_no_secrets.py
 - 信息架构：`docs/11_information_architecture.md`
 - `v1.2` 归档文档：`docs/releases/v1.2/`
 - `v1.3` 基线文档：`docs/releases/v1.3/`
-- `v1.4` 试运行文档：`docs/releases/v1.4/`
+- `v1.4` 封板文档：`docs/releases/v1.4/`
 
 ## 输出位置
 
