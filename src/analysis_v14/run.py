@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List
 
 from .loader import build_report_record, collect_sample_files
 from .parser import extract_text, segment_text
-from .reporter import build_summary_markdown, write_markdown
+from .reporter import build_business_tables, build_summary_markdown, write_markdown
 from .review import build_review_item_for_parse_failure, build_review_queue_from_tags
 from .schema import (
     DECISION_VALUES,
@@ -162,6 +162,20 @@ def run_pipeline(samples_dir: Path, annotations_dir: Path, out_dir: Path, model_
     )
     write_markdown(report_dir / "AI专题摘要.md", summary)
 
+    business_tables = build_business_tables(
+        report_rows=report_rows,
+        tag_rows=tag_rows,
+        evidence_rows=evidence_rows,
+        review_rows=review_rows,
+    )
+    write_csv_rows(report_dir / "dashboard_weekly.csv", business_tables["dashboard_weekly"])
+    write_csv_rows(report_dir / "dashboard_monthly.csv", business_tables["dashboard_monthly"])
+    write_csv_rows(report_dir / "dashboard_actor_trend.csv", business_tables["dashboard_actor_trend"])
+    write_csv_rows(report_dir / "dashboard_business_line_trend.csv", business_tables["dashboard_business_line_trend"])
+    write_csv_rows(report_dir / "opportunity_backlog.csv", business_tables["opportunity_backlog"])
+    write_csv_rows(report_dir / "evidence_trace.csv", business_tables["evidence_trace"])
+    write_csv_rows(report_dir / "review_worklist.csv", business_tables["review_worklist"])
+
     return {
         "run_id": run_id,
         "reports": len(report_rows),
@@ -261,6 +275,19 @@ def write_review_result_template(path: Path, review_rows: List[Dict[str, object]
                     "need_annotation_update": "",
                 }
             )
+
+
+def write_csv_rows(path: Path, rows: List[Dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        path.write_text("", encoding="utf-8")
+        return
+    fieldnames = list(rows[0].keys())
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
 
 
 def _normalize_classification(cls: Dict[str, object]) -> Dict[str, object]:

@@ -27,7 +27,7 @@ def infer_report_type(path: Path) -> str:
 
 
 def infer_time_info(path: Path) -> Dict[str, int]:
-    text = f"{path.parent.name} {path.name}"
+    text = str(path)
     year_match = re.search(r"(20\d{2})", text)
     month_match = re.search(r"(\d{1,2})月", text)
     week_match = re.search(r"第(\d{1,2})周", text)

@@ -15,6 +15,8 @@ from .schema import (
     PARSE_REASON_TOOL_MISSING,
 )
 
+SUBPROCESS_TIMEOUT_SECONDS = 20
+
 
 def extract_text(path: Path) -> Tuple[str, str, str]:
     suffix = path.suffix.lower()
@@ -88,11 +90,14 @@ def _extract_pdf(path: Path) -> Tuple[str, str, str]:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
             text = result.stdout.strip()
             if text:
                 return text, "", ""
             return "", "PDF 解析结果为空", PARSE_REASON_PDF
+        except subprocess.TimeoutExpired:
+            return "", f"PDF 解析超时（>{SUBPROCESS_TIMEOUT_SECONDS}s）", PARSE_REASON_PDF
         except Exception as exc:
             return "", f"PDF 解析失败: {exc}", PARSE_REASON_PDF
 
@@ -111,11 +116,14 @@ def _extract_doc(path: Path) -> Tuple[str, str, str]:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
             text = result.stdout.strip()
             if text:
                 return text, "", ""
             return "", "DOC 解析结果为空", PARSE_REASON_DOC
+        except subprocess.TimeoutExpired:
+            return "", f"DOC 解析超时（antiword >{SUBPROCESS_TIMEOUT_SECONDS}s）", PARSE_REASON_DOC
         except Exception as exc:
             return "", f"DOC 解析失败: {exc}", PARSE_REASON_DOC
 
@@ -127,11 +135,14 @@ def _extract_doc(path: Path) -> Tuple[str, str, str]:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
             text = result.stdout.strip()
             if text:
                 return text, "", ""
             return "", "DOC 解析结果为空", PARSE_REASON_DOC
+        except subprocess.TimeoutExpired:
+            return "", f"DOC 解析超时（catdoc >{SUBPROCESS_TIMEOUT_SECONDS}s）", PARSE_REASON_DOC
         except Exception as exc:
             return "", f"DOC 解析失败: {exc}", PARSE_REASON_DOC
 
@@ -143,11 +154,14 @@ def _extract_doc(path: Path) -> Tuple[str, str, str]:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
             text = result.stdout.strip()
             if text:
                 return text, "", ""
             return "", "DOC 解析结果为空", PARSE_REASON_DOC
+        except subprocess.TimeoutExpired:
+            return "", f"DOC 解析超时（textutil >{SUBPROCESS_TIMEOUT_SECONDS}s）", PARSE_REASON_DOC
         except Exception as exc:
             return "", f"DOC 解析失败: {exc}", PARSE_REASON_DOC
 
