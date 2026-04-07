@@ -14,6 +14,7 @@ import logging
 import email
 import schedule
 import time
+import tempfile
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -126,8 +127,7 @@ class WeeklyReportDownloader:
         parent_dir = os.path.dirname(history_file)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
-        with open(history_file, 'w', encoding='utf-8') as f:
-            json.dump(self.download_history, f, ensure_ascii=False, indent=2)
+        self._atomic_write_json(history_file, self.download_history)
 
     def _save_run_log(self):
         """保存运行日志"""
@@ -146,9 +146,45 @@ class WeeklyReportDownloader:
         parent_dir = os.path.dirname(log_file)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
-        with open(log_file, 'w', encoding='utf-8') as f:
-            json.dump(logs, f, ensure_ascii=False, indent=2)
+        self._atomic_write_json(log_file, logs)
         self._run_log_saved = True
+
+    def _atomic_write_json(self, target_file: str, payload: object):
+        """原子写入 JSON，降低 iCloud/文件同步场景下的覆盖写冲突"""
+        parent_dir = os.path.dirname(target_file)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+
+        temp_path = None
+        last_error = None
+        for attempt in range(1, 4):
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode='w',
+                    encoding='utf-8',
+                    dir=parent_dir or '.',
+                    delete=False
+                ) as tmp:
+                    temp_path = tmp.name
+                    json.dump(payload, tmp, ensure_ascii=False, indent=2)
+                    tmp.flush()
+                    os.fsync(tmp.fileno())
+                os.replace(temp_path, target_file)
+                return
+            except OSError as e:
+                last_error = e
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+                if getattr(e, "errno", None) == 11 and attempt < 3:
+                    time.sleep(0.5 * attempt)
+                    continue
+                raise
+
+        if last_error:
+            raise last_error
 
     def _format_week_folder(self, year: int, month: int, week: int) -> str:
         """格式化周报目录名"""
@@ -1052,7 +1088,13 @@ class WeeklyReportDownloader:
 
     def search_weekly_report_emails(self, mailbox: MailBox) -> List:
         """搜索周报邮件"""
-        logger.info("正在搜索周报邮件...")
+        type_filter = self.config.get('report_type_filter', 'all')
+        report_label = {
+            "weekly": "周报",
+            "monthly": "月报",
+            "all": "报告"
+        }.get(type_filter, "报告")
+        logger.info(f"正在搜索{report_label}邮件...")
 
         # 获取日期过滤配置
         date_filter = self.config.get("date_filter", {})
@@ -1172,7 +1214,6 @@ class WeeklyReportDownloader:
                 logger.info(f"找到报告: {subject[:40]}... 类型: {report_type}")
 
                 # 获取配置的类型过滤
-                type_filter = self.config.get('report_type_filter', 'all')
                 if type_filter == 'weekly' and report_type != 'weekly':
                     continue
                 if type_filter == 'monthly' and report_type != 'monthly':
@@ -1373,7 +1414,7 @@ class WeeklyReportDownloader:
                 logger.warning(f"处理邮件失败: {str(e)}")
                 continue
 
-        logger.info(f"找到 {len(emails)} 封周报邮件(带附件)")
+        logger.info(f"找到 {len(emails)} 封{report_label}邮件(带附件)")
         self.run_log["total_emails"] = len(emails)
         return emails
 
@@ -2130,6 +2171,7 @@ class WeeklyReportDownloader:
 
         weekly_day = scheduler_config.get("weekly_day", 1)  # 默认周一
         monthly_day = scheduler_config.get("monthly_day", 1)  # 默认1号
+        monthly_window_days = max(1, int(scheduler_config.get("monthly_window_days", 5)))
         hour = scheduler_config.get("hour", 9)
         minute = scheduler_config.get("minute", 0)
 
@@ -2157,13 +2199,21 @@ class WeeklyReportDownloader:
             self.run_download(report_type_filter="monthly")
 
         # 检查是否每月N号（需要额外逻辑判断）
-        # 由于schedule库原生不支持"每月N号"，我们使用每日检查的方式
+        # 由于 schedule 库原生不支持"每月N号到N+X号"，这里采用每日检查的方式
         def check_monthly():
-            if datetime.now().day == monthly_day:
+            current_day = datetime.now().day
+            last_day = monthly_day + monthly_window_days - 1
+            if monthly_day <= current_day <= last_day:
                 run_monthly()
 
         schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(check_monthly)
-        logger.info(f"已设置每月 {monthly_day} 日 {hour:02d}:{minute:02d} 执行月报下载")
+        if monthly_window_days == 1:
+            logger.info(f"已设置每月 {monthly_day} 日 {hour:02d}:{minute:02d} 执行月报下载")
+        else:
+            logger.info(
+                f"已设置每月 {monthly_day}-{monthly_day + monthly_window_days - 1} 日 "
+                f"{hour:02d}:{minute:02d} 执行月报下载"
+            )
 
         logger.info("定时任务已启动，程序将持续运行...")
 
@@ -2192,6 +2242,12 @@ def main():
     parser.add_argument("-c", "--config", default="data/input/config.json", help="配置文件路径")
     parser.add_argument("--daemon", "-d", action="store_true", help="以定时任务模式运行（后台持续运行）")
     parser.add_argument("--once", action="store_true", help="只运行一次，不进入定时循环")
+    parser.add_argument(
+        "--report-type",
+        choices=["all", "weekly", "monthly"],
+        default="all",
+        help="单次运行时仅抓取指定报告类型"
+    )
     parser.add_argument("--audit", action="store_true", help="扫描现有归档目录并输出审计报告")
     parser.add_argument("--audit-output", default="data/output/audit/reports", help="审计报告输出目录")
     parser.add_argument("--repair", action="store_true", help="按审计结果修复历史归档目录")
@@ -2238,9 +2294,7 @@ def main():
         downloader.run_scheduler()
     else:
         # 单次运行模式
-        downloader.download_and_classify()
-        # 发送通知（如果启用）
-        downloader.send_notification()
+        downloader.run_download(report_type_filter=args.report_type)
 
 
 if __name__ == "__main__":
