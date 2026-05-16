@@ -90,13 +90,26 @@ def extract_owner_hint(file_path: str) -> str:
     return token if token else stem[:30]
 
 
-def build_owner_registry(report_rows: Iterable[Dict[str, object]], extra_owner_hints: Sequence[str] | None = None) -> List[Dict[str, object]]:
+def build_owner_registry(
+    report_rows: Iterable[Dict[str, object]],
+    extra_owner_hints: Sequence[str] | None = None,
+    sales_roster: Sequence[Dict[str, object]] | None = None,
+) -> List[Dict[str, object]]:
     """基于报告级信息构建销售/组织归一注册表。"""
     registry: Dict[str, Dict[str, object]] = {}
+    roster_lookup: Dict[str, Dict[str, object]] = {}
+    for row in sales_roster or []:
+        roster_record = _build_roster_owner_record(row)
+        registry[str(roster_record["salesperson_id"])] = roster_record
+        for token in roster_record.get("aliases", []):
+            key = canonicalize_owner_name(str(token))
+            if key:
+                roster_lookup[key] = roster_record
+
     for row in report_rows:
         file_path = str(row.get("file_path", ""))
         owner_hint = extract_owner_hint(file_path)
-        owner_record = infer_owner_record(owner_hint, file_path)
+        owner_record = _resolve_owner_record(owner_hint, file_path, roster_lookup)
         existing = registry.get(owner_record["salesperson_id"])
         if not existing:
             registry[owner_record["salesperson_id"]] = owner_record
@@ -111,7 +124,7 @@ def build_owner_registry(report_rows: Iterable[Dict[str, object]], extra_owner_h
         candidate = canonicalize_owner_name(owner_hint)
         if not candidate:
             continue
-        owner_record = infer_owner_record(candidate, "")
+        owner_record = _resolve_owner_record(candidate, "", roster_lookup)
         existing = registry.get(owner_record["salesperson_id"])
         if not existing:
             registry[owner_record["salesperson_id"]] = owner_record
@@ -119,7 +132,38 @@ def build_owner_registry(report_rows: Iterable[Dict[str, object]], extra_owner_h
         aliases = set(existing.get("aliases", []))
         aliases.update(owner_record.get("aliases", []))
         existing["aliases"] = sorted(aliases)
-    return sorted(registry.values(), key=lambda item: (str(item["owner_type"]), str(item["salesperson_name"])))
+    return sorted(
+        registry.values(),
+        key=lambda item: (
+            str(item.get("owner_type", "")),
+            str(item.get("battle_zone_name", "")),
+            str(item.get("region_name", "")),
+            str(item.get("salesperson_name", "")),
+        ),
+    )
+
+
+def build_owner_lookup(owner_registry: Sequence[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
+    """按 owner_hint / 别名建立查询表。"""
+    lookup: Dict[str, Dict[str, object]] = {}
+    for row in owner_registry:
+        candidates = {
+            str(row.get("owner_hint", "")),
+            str(row.get("salesperson_name", "")),
+            str(row.get("display_name", "")),
+        }
+        candidates.update(str(item) for item in row.get("aliases", []))
+        for token in candidates:
+            key = canonicalize_owner_name(token)
+            if key:
+                lookup[key] = row
+    return lookup
+
+
+def resolve_owner(owner_hint: str, owner_lookup: Dict[str, Dict[str, object]]) -> Dict[str, object]:
+    """从 owner_hint 解析到注册表对象。"""
+    key = canonicalize_owner_name(owner_hint)
+    return owner_lookup.get(key, {})
 
 
 def infer_owner_record(owner_hint: str, file_path: str) -> Dict[str, object]:
@@ -138,11 +182,21 @@ def infer_owner_record(owner_hint: str, file_path: str) -> Dict[str, object]:
     return {
         "salesperson_id": salesperson_id,
         "salesperson_name": salesperson_name,
+        "display_name": salesperson_name,
         "owner_hint": candidate,
         "owner_type": owner_type,
         "aliases": [candidate] if candidate else [],
         "source_paths": 1,
         "example_file_path": file_path,
+        "employment_status": "historical_unmatched" if owner_type == OWNER_TYPE_PERSON else owner_type,
+        "flower_name": candidate if owner_type == OWNER_TYPE_PERSON else "",
+        "team_name": "",
+        "org_full_name": "",
+        "department_name": "",
+        "job_title": "",
+        "battle_zone_name": "",
+        "region_name": "",
+        "roster_source_date": "",
     }
 
 
@@ -192,3 +246,45 @@ def _clean_owner_token(raw: str) -> str:
     if not token:
         return ""
     return token[:24]
+
+
+def _build_roster_owner_record(row: Dict[str, object]) -> Dict[str, object]:
+    aliases = sorted({str(row.get("flower_name", "")).strip(), str(row.get("display_name", "")).strip()} - {""})
+    return {
+        "salesperson_id": str(row.get("salesperson_id", "")),
+        "salesperson_name": str(row.get("display_name", "")) or str(row.get("flower_name", "")),
+        "display_name": str(row.get("display_name", "")) or str(row.get("flower_name", "")),
+        "owner_hint": str(row.get("flower_name", "")),
+        "owner_type": OWNER_TYPE_PERSON,
+        "aliases": aliases,
+        "source_paths": 0,
+        "example_file_path": "",
+        "employment_status": str(row.get("employment_status", "active")),
+        "flower_name": str(row.get("flower_name", "")),
+        "team_name": str(row.get("team_name", "")),
+        "org_full_name": str(row.get("org_full_name", "")),
+        "department_name": str(row.get("department_name", "")),
+        "job_title": str(row.get("job_title", "")),
+        "battle_zone_name": str(row.get("battle_zone_name", "")),
+        "region_name": str(row.get("region_name", "")),
+        "roster_source_date": str(row.get("roster_source_date", "")),
+    }
+
+
+def _resolve_owner_record(
+    owner_hint: str,
+    file_path: str,
+    roster_lookup: Dict[str, Dict[str, object]],
+) -> Dict[str, object]:
+    candidate = canonicalize_owner_name(owner_hint)
+    if candidate and candidate in roster_lookup:
+        roster_row = roster_lookup[candidate]
+        record = dict(roster_row)
+        aliases = set(record.get("aliases", []))
+        aliases.add(candidate)
+        record["aliases"] = sorted(aliases)
+        record["source_paths"] = int(record.get("source_paths", 0)) + 1
+        if file_path and not str(record.get("example_file_path", "")):
+            record["example_file_path"] = file_path
+        return record
+    return infer_owner_record(candidate or owner_hint, file_path)

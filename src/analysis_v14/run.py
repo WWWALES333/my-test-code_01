@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--annotations", required=True, help="标注目录路径")
     parser.add_argument("--out", required=True, help="输出目录路径")
     parser.add_argument("--model-mode", choices=["mock", "real"], default="mock", help="模型模式")
+    parser.add_argument("--llm-concurrency", type=int, default=4, help="real 模式下 needs_llm 样本的并发度")
     return parser.parse_args()
 
 
@@ -36,7 +37,13 @@ def ensure_input_dirs(samples_dir: Path, annotations_dir: Path) -> None:
     annotations_dir.mkdir(parents=True, exist_ok=True)
 
 
-def run_pipeline(samples_dir: Path, annotations_dir: Path, out_dir: Path, model_mode: str) -> Dict[str, int]:
+def run_pipeline(
+    samples_dir: Path,
+    annotations_dir: Path,
+    out_dir: Path,
+    model_mode: str,
+    llm_concurrency: int = 4,
+) -> Dict[str, int]:
     ensure_input_dirs(samples_dir, annotations_dir)
     sample_files = collect_sample_files(samples_dir)
     if not sample_files:
@@ -57,6 +64,7 @@ def run_pipeline(samples_dir: Path, annotations_dir: Path, out_dir: Path, model_
     tag_rows: List[Dict[str, object]] = []
     evidence_rows: List[Dict[str, object]] = []
     parse_failure_reviews: List[Dict[str, object]] = []
+    segment_tasks: List[Dict[str, object]] = []
 
     for path in sample_files:
         report_row = build_report_record(path)
@@ -78,60 +86,86 @@ def run_pipeline(samples_dir: Path, annotations_dir: Path, out_dir: Path, model_
             continue
 
         for idx, segment in enumerate(segments, start=1):
-            segment_id = f"S{idx:03d}"
-            cls = tagger.classify(segment, context=report_row)
-            cls = _normalize_classification(cls)
+            segment_tasks.append(
+                {
+                    "report_row": report_row,
+                    "segment_id": f"S{idx:03d}",
+                    "segment": segment,
+                    "parse_status": parse_status,
+                }
+            )
 
-            if not cls["is_ai_hit"] and cls["decision_status"] == "confirmed":
-                continue
+    classifications = tagger.classify_batch(
+        [(str(task["segment"]), dict(task["report_row"])) for task in segment_tasks],
+        llm_concurrency=llm_concurrency,
+    )
+    for task, cls in zip(segment_tasks, classifications):
+        report_row = dict(task["report_row"])
+        segment_id = str(task["segment_id"])
+        segment = str(task["segment"])
+        parse_status = str(task["parse_status"])
+        cls = _normalize_classification(cls)
 
-            tag_id = stable_hash(str(report_row["report_id"]), segment_id, segment)
-            tag_row = {
-                "tag_id": tag_id,
-                "report_id": report_row["report_id"],
-                "segment_id": segment_id,
-                "is_ai_hit": cls["is_ai_hit"],
-                "business_line": cls["business_line"],
-                "ai_actor": cls["ai_actor"],
-                "actor_primary": cls["actor_primary"],
-                "actor_subtype": cls["actor_subtype"],
-                "ai_scope": cls["ai_scope"],
-                "interaction_outcome": cls["interaction_outcome"],
-                "certainty_level": cls["certainty_level"],
-                "review_reason_code": cls["review_reason_code"],
-                "decision_status": cls["decision_status"],
-                "confidence": cls["confidence"],
-                "reason": cls["reason"],
-                "run_id": run_id,
-                "model_mode": cls.get("model_mode", model_mode),
-                "model_name": cls.get("model_name", default_model_name),
-                "parse_status": parse_status,
-                "source_text": segment,
-                "file_path": report_row["file_path"],
-            }
-            tag_rows.append(tag_row)
+        if not cls["is_ai_hit"] and cls["decision_status"] == "confirmed":
+            continue
 
-            if cls["is_ai_hit"]:
-                evidence_rows.append(
-                    {
-                        "evidence_id": stable_hash(str(report_row["report_id"]), segment_id, "evidence"),
-                        "report_id": report_row["report_id"],
-                        "segment_id": segment_id,
-                        "source_text": segment,
-                        "business_line": cls["business_line"],
-                        "ai_actor": cls["ai_actor"],
-                        "actor_primary": cls["actor_primary"],
-                        "actor_subtype": cls["actor_subtype"],
-                        "ai_scope": cls["ai_scope"],
-                        "interaction_outcome": cls["interaction_outcome"],
-                        "certainty_level": cls["certainty_level"],
-                        "decision_status": cls["decision_status"],
-                        "run_id": run_id,
-                        "model_mode": cls.get("model_mode", model_mode),
-                        "model_name": cls.get("model_name", default_model_name),
-                        "file_path": report_row["file_path"],
-                    }
-                )
+        tag_id = stable_hash(str(report_row["report_id"]), segment_id, segment)
+        tag_row = {
+            "tag_id": tag_id,
+            "report_id": report_row["report_id"],
+            "segment_id": segment_id,
+            "is_ai_hit": cls["is_ai_hit"],
+            "business_line": cls["business_line"],
+            "ai_actor": cls["ai_actor"],
+            "actor_primary": cls["actor_primary"],
+            "actor_subtype": cls["actor_subtype"],
+            "ai_scope": cls["ai_scope"],
+            "interaction_outcome": cls["interaction_outcome"],
+            "certainty_level": cls["certainty_level"],
+            "review_reason_code": cls["review_reason_code"],
+            "decision_status": cls["decision_status"],
+            "confidence": cls["confidence"],
+            "reason": cls["reason"],
+            "triage_status": cls.get("triage_status", ""),
+            "used_label_gap": cls.get("used_label_gap", False),
+            "llm_invoked": cls.get("llm_invoked", False),
+            "llm_failed": cls.get("llm_failed", False),
+            "rule_baseline": cls.get("rule_baseline", {}),
+            "run_id": run_id,
+            "model_mode": cls.get("model_mode", model_mode),
+            "model_name": cls.get("model_name", default_model_name),
+            "parse_status": parse_status,
+            "source_text": segment,
+            "file_path": report_row["file_path"],
+        }
+        tag_rows.append(tag_row)
+
+        if cls["is_ai_hit"]:
+            evidence_rows.append(
+                {
+                    "evidence_id": stable_hash(str(report_row["report_id"]), segment_id, "evidence"),
+                    "report_id": report_row["report_id"],
+                    "segment_id": segment_id,
+                    "source_text": segment,
+                    "business_line": cls["business_line"],
+                    "ai_actor": cls["ai_actor"],
+                    "actor_primary": cls["actor_primary"],
+                    "actor_subtype": cls["actor_subtype"],
+                    "ai_scope": cls["ai_scope"],
+                    "interaction_outcome": cls["interaction_outcome"],
+                    "certainty_level": cls["certainty_level"],
+                    "decision_status": cls["decision_status"],
+                    "triage_status": cls.get("triage_status", ""),
+                    "used_label_gap": cls.get("used_label_gap", False),
+                    "llm_invoked": cls.get("llm_invoked", False),
+                    "llm_failed": cls.get("llm_failed", False),
+                    "rule_baseline": cls.get("rule_baseline", {}),
+                    "run_id": run_id,
+                    "model_mode": cls.get("model_mode", model_mode),
+                    "model_name": cls.get("model_name", default_model_name),
+                    "file_path": report_row["file_path"],
+                }
+            )
 
     review_rows = build_review_queue_from_tags(tag_rows)
     review_rows.extend(parse_failure_reviews)
@@ -196,6 +230,8 @@ def run_pipeline(samples_dir: Path, annotations_dir: Path, out_dir: Path, model_
         "tag_rows": len(tag_rows),
         "evidence_rows": len(evidence_rows),
         "review_rows": len(review_rows),
+        "llm_concurrency": llm_concurrency,
+        "llm_invoked": sum(1 for row in tag_rows if bool(row.get("llm_invoked", False))),
     }
 
 
@@ -219,6 +255,11 @@ def strip_tag_rows(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
                 "decision_status": row["decision_status"],
                 "confidence": row["confidence"],
                 "reason": row["reason"],
+                "triage_status": row.get("triage_status", ""),
+                "used_label_gap": row.get("used_label_gap", False),
+                "llm_invoked": row.get("llm_invoked", False),
+                "llm_failed": row.get("llm_failed", False),
+                "rule_baseline": row.get("rule_baseline", {}),
                 "run_id": row["run_id"],
                 "model_mode": row["model_mode"],
                 "model_name": row["model_name"],
@@ -306,6 +347,11 @@ def write_csv_rows(path: Path, rows: List[Dict[str, object]]) -> None:
 
 def _normalize_classification(cls: Dict[str, object]) -> Dict[str, object]:
     normalized = dict(cls)
+    normalized.setdefault("triage_status", "")
+    normalized["used_label_gap"] = bool(normalized.get("used_label_gap", False) or str(normalized.get("actor_primary", "")).strip() == "label_gap")
+    normalized.setdefault("llm_invoked", False)
+    normalized.setdefault("llm_failed", False)
+    normalized.setdefault("rule_baseline", {})
     decision_status = str(normalized.get("decision_status", "")).strip()
     if decision_status in DECISION_VALUES:
         return normalized
@@ -331,6 +377,7 @@ def main() -> None:
         annotations_dir=Path(args.annotations),
         out_dir=Path(args.out),
         model_mode=args.model_mode,
+        llm_concurrency=args.llm_concurrency,
     )
     print(
         "v1.4 分析完成: run_id={run_id}, reports={reports}, tags={tag_rows}, evidence={evidence_rows}, review={review_rows}".format(

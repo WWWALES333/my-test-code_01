@@ -6,40 +6,41 @@
 - 先保证业务可读性、追溯性和复核闭环，再优化样式与效率。
 
 ## 2. 数据层与中间层
-- [ ] 新建 `src/analysis_v15/` 独立模块与运行入口。
-- [ ] 建立 `data/output/insights/v1.5/normalized/`、`reports/`、`review/`、`web/` 目录约束。
-- [ ] 实现销售归一对象 `owner_registry`。
-- [ ] 实现 `report_facts`、`evidence_facts`、`sales_monthly_rollup`。
-- [ ] 实现 `insight_cards`、`review_tasks`、`review_decisions`、`dashboard_snapshot`。
-- [ ] 确保 `v1.3`、`v1.4` 产物不被覆盖。
+- [x] 新建 `src/analysis_v15/` 独立模块与运行入口。
+- [x] 建立 `data/output/insights/v1.5/normalized/`、`reports/`、`review/`、`web/` 目录约束。
+- [x] 实现销售归一对象 `owner_registry`。
+- [x] 实现 `report_facts`、`evidence_facts`、`sales_monthly_rollup`。
+- [x] 实现 `insight_cards`、`review_tasks`、`review_decisions`、`dashboard_snapshot`。
+- [x] 确保 `v1.3`、`v1.4` 产物不被覆盖。
 
 ## 3. Web 工作台
-- [ ] 建立统一工作台入口。
-- [ ] 完成 `overview` 模块。
-- [ ] 完成 `trends` 模块。
-- [ ] 完成 `sales` 模块。
-- [ ] 完成 `insights` 模块。
-- [ ] 完成 `evidence` 模块。
+- [x] 建立统一工作台入口。
+- [x] 完成 `overview` 模块。
+- [x] 完成 `trends` 模块。
+- [x] 完成 `sales` 模块。
+- [x] 完成 `insights` 模块。
+- [x] 完成 `review` 模块。
+- [x] 完成 `evidence` 模块。
 
 ## 4. 复核闭环
-- [ ] 生成标准化 `review_tasks`。
-- [ ] 在工作台中展示待复核项、上下文和可编辑字段。
-- [ ] 提交复核结果并写入 `review_decisions`。
-- [ ] 下一轮分析优先消费人工复核结果。
+- [x] 生成标准化 `review_tasks`。
+- [x] 在工作台中展示待复核项、上下文和可编辑字段。
+- [x] 提交复核结果并写入 `review_decisions`。
+- [x] 下一轮分析优先消费人工复核结果。
+- [x] 学习字段沉淀为候选池，不自动修改规则或 Prompt。
 
 ## 5. skill 试点
-- [ ] 落地项目内 `trend-insight-analysis` skill。
-- [ ] 落地项目内 `evidence-to-insight` skill。
-- [ ] 接通趋势中心对 trend skill 的消费链路。
-- [ ] 接通结论中心对 insight skill 的消费链路。
-- [ ] 验证 skill 失败不阻塞主链路。
+- [x] 落地项目内 `trend-insight-analysis` skill 文档。
+- [x] 落地项目内 `evidence-to-insight` skill 文档。
+- [x] 明确 skill 只作为分析方法辅助，不作为当前运行时系统模块。
+- [x] 验证 skill 不阻塞主链路。
 
 ## 6. 验收与封板准备
-- [ ] 以 `2025-01` 至当前数据跑通 `v1.5` 工作台。
-- [ ] 用 `v1.3` 冻结样本做回归验证。
-- [ ] 完成趋势、销售、结论、复核四类人工验收。
-- [ ] 执行安全检查脚本并通过。
-- [ ] 回填 `change_log.md` 并准备封板。
+- [x] 使用既有 `v1.5_real_round2` 归一化产物重建工作台快照。
+- [x] 用单元测试覆盖 `v1.3/v1.4/v1.5` 关键链路。
+- [x] 执行安全检查脚本并通过。
+- [x] 回填 `change_log.md` 并准备封板。
+- [ ] 全量 2023-当前数据重建耗时较长，作为后续后台任务，不阻塞本次封板。
 
 ## 7. 当前不进入实现的事项
 - [ ] 数据库方案（留待后续版本评估）

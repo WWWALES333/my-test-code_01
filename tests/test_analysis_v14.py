@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.analysis_v14.run import run_pipeline
+from src.analysis_v14.tagger import Tagger
 
 
 class TestAnalysisV14(unittest.TestCase):
@@ -72,6 +73,11 @@ class TestAnalysisV14(unittest.TestCase):
             self.assertIn("model_name", first_tag)
             self.assertIn("run_id", first_tag)
             self.assertIn("parse_status", first_tag)
+            self.assertIn("triage_status", first_tag)
+            self.assertIn("used_label_gap", first_tag)
+            self.assertIn("llm_invoked", first_tag)
+            self.assertIn("llm_failed", first_tag)
+            self.assertIn("rule_baseline", first_tag)
 
     def test_doc_parse_failure_is_recorded_with_reason_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -120,7 +126,7 @@ class TestAnalysisV14(unittest.TestCase):
             annotations.mkdir(parents=True)
 
             (samples / "S004_2026年3月第2周周报.txt").write_text(
-                "我今天使用 ChatGPT 总结问诊沟通重点，并对医生做了演示。",
+                "听了龙胆的分享，收获很多，如今AI高速发展，医生通过平台的AI诊疗可以改变很多。",
                 encoding="utf-8",
             )
 
@@ -137,6 +143,9 @@ class TestAnalysisV14(unittest.TestCase):
             self.assertEqual(first["model_mode"], "real")
             self.assertEqual(first["decision_status"], "pending_human_review")
             self.assertIn("MODEL_CALL_FAILED", first["review_reason_code"])
+            self.assertEqual(first["triage_status"], "needs_llm")
+            self.assertTrue(first["llm_invoked"])
+            self.assertTrue(first["llm_failed"])
 
     def test_pdf_parse_failure_records_reason(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -161,6 +170,120 @@ class TestAnalysisV14(unittest.TestCase):
                 report_rows[0]["parse_reason_code"],
                 {"PARSE_FAILED_PDF", "PARSER_TOOL_MISSING"},
             )
+
+    def test_obvious_samples_do_not_invoke_llm_in_real_mode(self) -> None:
+        tagger = Tagger(mode="real")
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "m"}, clear=False):
+            with patch("src.analysis_v14.tagger.requests.post") as mock_post:
+                result = tagger.classify(
+                    "回访王老师，演示平台AI诊疗助手，并加微信发送体验链接。",
+                    context={"file_path": "2026年3月第2周/周报.txt"},
+                )
+        self.assertEqual(result["triage_status"], "auto_confirm")
+        self.assertFalse(result["llm_invoked"])
+        self.assertFalse(result["llm_failed"])
+        mock_post.assert_not_called()
+
+    def test_obvious_doctor_feedback_cloud_clinic_sample_is_auto_confirmed(self) -> None:
+        tagger = Tagger(mode="mock")
+        result = tagger.classify(
+            "回访温老师，介绍了平台的AI诊疗功能和诊后随访管理功能，老师觉得很不错，后面体验一下。",
+            context={"file_path": "2026年3月第2周/周报.txt"},
+        )
+        self.assertEqual(result["business_line"], "云诊室")
+        self.assertEqual(result["actor_primary"], "医生反馈")
+        self.assertEqual(result["decision_status"], "confirmed")
+        self.assertEqual(result["triage_status"], "auto_confirm")
+
+    def test_ambiguous_samples_invoke_llm_and_support_label_gap(self) -> None:
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "is_ai_hit": True,
+                                        "business_line": "云诊室",
+                                        "actor_primary": "label_gap",
+                                        "ai_scope": "product_ai",
+                                        "decision_status": "confirmed",
+                                        "confidence": 0.84,
+                                        "reason": "该片段描述的是销售内部学习后的业务理解，不适合现有主体标签。",
+                                        "used_label_gap": True,
+                                        "should_review": False,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        tagger = Tagger(mode="real")
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "m"}, clear=False):
+            with patch("src.analysis_v14.tagger.requests.post", return_value=_FakeResponse()) as mock_post:
+                result = tagger.classify(
+                    "听了龙胆的分享，收获很多，如今AI高速发展，医生通过平台的AI诊疗可以改变很多。",
+                    context={"file_path": "2026年1月第3周/周报.txt"},
+                )
+        self.assertEqual(result["triage_status"], "needs_llm")
+        self.assertTrue(result["llm_invoked"])
+        self.assertFalse(result["llm_failed"])
+        self.assertEqual(result["business_line"], "云诊室")
+        self.assertEqual(result["actor_primary"], "label_gap")
+        self.assertTrue(result["used_label_gap"])
+        mock_post.assert_called_once()
+
+    def test_classify_batch_only_invokes_llm_for_needs_llm(self) -> None:
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "is_ai_hit": True,
+                                        "business_line": "云诊室",
+                                        "actor_primary": "label_gap",
+                                        "ai_scope": "product_ai",
+                                        "decision_status": "confirmed",
+                                        "confidence": 0.8,
+                                        "reason": "边界样本，现有主体不适用。",
+                                        "used_label_gap": True,
+                                        "should_review": False,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        tagger = Tagger(mode="real")
+        items = [
+            ("回访王老师，演示平台AI诊疗助手，并加微信发送体验链接。", {"file_path": "2026年3月第2周/周报.txt"}),
+            ("听了龙胆的分享，收获很多，如今AI高速发展，医生通过平台的AI诊疗可以改变很多。", {"file_path": "2026年1月第3周/周报.txt"}),
+        ]
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "m"}, clear=False):
+            with patch("src.analysis_v14.tagger.requests.post", return_value=_FakeResponse()) as mock_post:
+                results = tagger.classify_batch(items, llm_concurrency=4)
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0]["triage_status"], "auto_confirm")
+        self.assertFalse(results[0]["llm_invoked"])
+        self.assertEqual(results[1]["triage_status"], "needs_llm")
+        self.assertTrue(results[1]["llm_invoked"])
+        self.assertEqual(results[1]["actor_primary"], "label_gap")
+        mock_post.assert_called_once()
 
 
 if __name__ == "__main__":

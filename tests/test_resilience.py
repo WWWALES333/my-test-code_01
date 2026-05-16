@@ -213,6 +213,34 @@ class TestSchedulerResilience(unittest.TestCase):
             self.assertEqual(mailbox.client.fetch.call_count, 2)
             self.assertEqual(len(emails), 1)
 
+    def test_audit_reports_zero_count_missing_months(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            config_path = self._build_config(base_dir)
+            output_root = base_dir / "output"
+            week_dir = output_root / "2026" / "2026年05月第1周"
+            month_dir = output_root / "2026" / "03月报"
+            week_dir.mkdir(parents=True)
+            month_dir.mkdir(parents=True)
+            (week_dir / "2026年5月第1周 将军汤云南区域工作周报.docx").write_bytes(b"demo")
+            (month_dir / "三战区2026年3月月报.docx").write_bytes(b"demo")
+
+            downloader = WeeklyReportDownloader(str(config_path))
+            result = downloader.generate_audit_report(str(base_dir / "audit"))
+
+            monthly = {item["period"]: item for item in result["summary"]["monthly_counts"]}
+            self.assertEqual(monthly["2026/02月报"]["count"], 0)
+            self.assertEqual(monthly["2026/04月报"]["count"], 0)
+            self.assertEqual(monthly["2026/04月报"]["status"], "under_expected")
+
+    def test_dated_monthly_template_is_counted_as_report(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._build_config(Path(temp_dir))
+            downloader = WeeklyReportDownloader(str(config_path))
+
+            self.assertFalse(downloader._looks_like_template("战区月报模板2026.3.docx"))
+            self.assertTrue(downloader._looks_like_template("战区月报模板.docx"))
+
 
 if __name__ == "__main__":
     unittest.main()

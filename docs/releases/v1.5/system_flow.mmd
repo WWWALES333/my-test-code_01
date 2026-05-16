@@ -1,0 +1,81 @@
+flowchart TD
+  subgraph L1["输入层"]
+    A1["邮箱 / 已归档历史文档"]
+    A2["src/main.py"]
+    A3["data/output/sales_reports/..."]
+    A4["data/input/v1.5/roster/*.xlsx"]
+  end
+
+  subgraph L2["抽取与切分层"]
+    B1["src/analysis_v15/run.py"]
+    B2["src/analysis_v14/loader.py"]
+    B3["src/analysis_v14/parser.py"]
+    B4["src/analysis_v15/parser.py"]
+  end
+
+  subgraph L3["识别与分类层"]
+    C1["src/analysis_v14/tagger.py"]
+    C2["data/output/insights/v1.5/extracted"]
+  end
+
+  subgraph L4["规范化与聚合层"]
+    D1["src/analysis_v15/roster.py"]
+    D2["src/analysis_v15/owner.py"]
+    D3["src/analysis_v15/normalize.py"]
+    D4["src/analysis_v15/metrics.py"]
+    D5["src/analysis_v15/insights.py"]
+    D6["data/output/insights/v1.5/normalized"]
+  end
+
+  subgraph L5["复核与回写层"]
+    E1["src/analysis_v14/review.py"]
+    E2["src/analysis_v15/review_state.py"]
+    E3["data/output/insights/v1.5/review/review_decisions.jsonl"]
+    E4["run_manifest.json"]
+  end
+
+  subgraph L6["展示与下钻层"]
+    F1["src/analysis_v15/reporter.py"]
+    F2["data/output/insights/v1.5/web"]
+    F3["src/analysis_v15/webapp.py"]
+    F4["总览 / 趋势 / 销售 / 结论 / 复核 / 证据"]
+  end
+
+  A1 --> A2
+  A2 --> A3
+  A3 --> B1
+  A4 --> D1
+
+  B1 --> B2
+  B1 --> B3
+  B1 --> B4
+  B2 --> C1
+  B3 --> C1
+  B4 --> C1
+  C1 --> C2
+
+  C2 --> E1
+  C2 --> D3
+  A4 --> D1
+  D1 --> D3
+  D1 --> D2
+  A3 --> D2
+  D2 --> D3
+  D3 --> D4
+  D3 --> D5
+  D4 --> D6
+  D5 --> D6
+
+  E1 --> E2
+  E2 --> E3
+  E3 --> D3
+  E4 --> B1
+  B1 --> E4
+
+  D6 --> F1
+  E3 --> F1
+  F1 --> F2
+  F2 --> F3
+  F3 --> F4
+  F3 --> E3
+  F3 --> B1

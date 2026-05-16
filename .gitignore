@@ -39,6 +39,7 @@ system.log
 
 # 本地敏感配置（禁止入库）
 data/input/config.json
+data/input/v1.5/roster/*.xlsx
 .claude/settings.local.json
 .env
 .env.*

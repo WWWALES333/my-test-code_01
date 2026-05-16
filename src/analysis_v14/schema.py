@@ -13,15 +13,28 @@ DECISION_VALUES = {
     DECISION_PENDING_HUMAN,
 }
 
+TRIAGE_AUTO_CONFIRM = "auto_confirm"
+TRIAGE_NEEDS_LLM = "needs_llm"
+TRIAGE_AUTO_REJECT = "auto_reject"
+
+TRIAGE_VALUES = {
+    TRIAGE_AUTO_CONFIRM,
+    TRIAGE_NEEDS_LLM,
+    TRIAGE_AUTO_REJECT,
+}
+
 CERTAINTY_LEVEL_VALUES = {"high", "medium", "low"}
 
 BUSINESS_LINE_VALUES = {"云诊室", "云管家", "混合", "待判断"}
+
+ACTOR_LABEL_GAP = "label_gap"
 
 ACTOR_PRIMARY_VALUES = {
     "销售自用",
     "销售对外介绍",
     "医生反馈",
     "潜在 AI 机会",
+    ACTOR_LABEL_GAP,
     "待判断",
 }
 
@@ -89,6 +102,14 @@ AI_OPPORTUNITY_KEYWORDS = [
 
 BUSINESS_LINE_KEYWORDS: Dict[str, List[str]] = {
     "云诊室": [
+        "老师",
+        "医馆",
+        "卫生院",
+        "平台ai",
+        "ai诊疗助手",
+        "诊疗助手",
+        "回访",
+        "演示",
         "医生",
         "问诊",
         "接诊",
@@ -145,6 +166,11 @@ ACTOR_KEYWORDS: Dict[str, List[str]] = {
     "销售对外介绍": [
         "介绍",
         "演示",
+        "推荐",
+        "回访",
+        "问候维护",
+        "加微信",
+        "体验",
         "沟通",
         "同步了一下",
         "给医生讲",
@@ -158,6 +184,13 @@ ACTOR_KEYWORDS: Dict[str, List[str]] = {
         "医生表示",
         "医生觉得",
         "医生提出",
+        "觉得",
+        "担心",
+        "婉拒",
+        "反馈",
+        "不成熟",
+        "不好",
+        "表示",
         "老板反馈",
         "诊所反馈",
         "感兴趣",

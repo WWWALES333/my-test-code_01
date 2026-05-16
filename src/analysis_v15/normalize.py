@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
-from .owner import build_owner_registry, extract_owner_hint
+from .owner import build_owner_lookup, extract_owner_hint, resolve_owner
 from .schema import (
     DECISION_CONFIRMED,
     TASK_STATUS_OPEN,
@@ -52,11 +52,11 @@ def build_report_facts(
     owner_registry: List[Dict[str, object]],
 ) -> List[Dict[str, object]]:
     """构建报告级事实表，统一销售对象和时间信息。"""
-    owner_map = {str(item["owner_hint"]): item for item in owner_registry}
+    owner_map = build_owner_lookup(owner_registry)
     rows: List[Dict[str, object]] = []
     for row in report_rows:
         owner_hint = extract_owner_hint(str(row.get("file_path", "")))
-        owner = owner_map.get(owner_hint, {})
+        owner = resolve_owner(owner_hint, owner_map)
         rows.append(
             {
                 "report_id": row.get("report_id", ""),
@@ -66,9 +66,12 @@ def build_report_facts(
                 "month": int(row.get("month", 0)),
                 "week_of_month": int(row.get("week_of_month", 0)),
                 "report_owner_id": owner.get("salesperson_id", ""),
-                "report_owner_name": owner.get("salesperson_name", owner_hint),
+                "report_owner_name": owner.get("display_name", owner.get("salesperson_name", owner_hint)),
                 "report_owner_type": owner.get("owner_type", "unknown"),
                 "report_owner_hint": owner_hint,
+                "battle_zone_name": owner.get("battle_zone_name", ""),
+                "region_name": owner.get("region_name", ""),
+                "employment_status": owner.get("employment_status", ""),
                 "file_path": row.get("file_path", ""),
                 "parse_status": row.get("parse_status", row.get("text_status", "")),
                 "parse_reason_code": row.get("parse_reason_code", ""),
@@ -88,7 +91,7 @@ def build_evidence_facts(
 ) -> List[Dict[str, object]]:
     """构建证据级事实表，并应用人工复核覆盖。"""
     report_map = {str(row["report_id"]): row for row in report_facts}
-    owner_map = {str(item["owner_hint"]): item for item in owner_registry}
+    owner_map = build_owner_lookup(owner_registry)
     rows: List[Dict[str, object]] = []
     for row in evidence_rows:
         report_id = str(row.get("report_id", ""))
@@ -97,7 +100,7 @@ def build_evidence_facts(
         decision = review_decisions.get((report_id, segment_id))
         final_labels = dict(decision.get("final_labels", {})) if decision else {}
         segment_owner_hint = str(row.get("segment_owner_hint", "")).strip() or str(report.get("report_owner_hint", "")).strip()
-        owner = owner_map.get(segment_owner_hint, {})
+        owner = resolve_owner(segment_owner_hint, owner_map)
 
         business_line = str(final_labels.get("business_line", row.get("business_line", "")))
         actor_primary = str(final_labels.get("actor_primary", row.get("actor_primary", row.get("ai_actor", ""))))
@@ -115,14 +118,23 @@ def build_evidence_facts(
                 "month": int(report.get("month", 0)),
                 "week_of_month": int(report.get("week_of_month", 0)),
                 "salesperson_id": owner.get("salesperson_id", report.get("report_owner_id", "")),
-                "salesperson_name": owner.get("salesperson_name", report.get("report_owner_name", "")),
+                "salesperson_name": owner.get("display_name", owner.get("salesperson_name", report.get("report_owner_name", ""))),
                 "owner_type": owner.get("owner_type", report.get("report_owner_type", "")),
                 "owner_hint": segment_owner_hint,
                 "report_owner_name": report.get("report_owner_name", ""),
+                "battle_zone_name": owner.get("battle_zone_name", report.get("battle_zone_name", "")),
+                "region_name": owner.get("region_name", report.get("region_name", "")),
+                "employment_status": owner.get("employment_status", report.get("employment_status", "")),
                 "business_line": business_line,
                 "actor_primary": actor_primary,
                 "ai_scope": ai_scope,
+                "is_ai_hit": bool(final_labels.get("is_ai_hit", True)),
                 "decision_status": decision_status,
+                "triage_status": row.get("triage_status", ""),
+                "used_label_gap": bool(final_labels.get("actor_primary", "") == "label_gap" or row.get("used_label_gap", False)),
+                "llm_invoked": bool(row.get("llm_invoked", False)),
+                "llm_failed": bool(row.get("llm_failed", False)),
+                "rule_baseline": row.get("rule_baseline", {}),
                 "source_text": row.get("source_text", ""),
                 "file_path": row.get("file_path", ""),
                 "review_status": TASK_STATUS_REVIEWED if decision else ("open" if decision_status != DECISION_CONFIRMED else "not_needed"),
@@ -170,8 +182,16 @@ def build_review_tasks(
                 "task_status": TASK_STATUS_REVIEWED if decision else TASK_STATUS_OPEN,
                 "current_decision_status": row.get("current_decision_status", row.get("decision_status", "")),
                 "current_fields": {
+                    "is_ai_hit": row.get("is_ai_hit", True),
+                    "business_line": row.get("business_line", ""),
+                    "actor_primary": row.get("actor_primary", row.get("ai_actor", "")),
+                    "ai_scope": row.get("ai_scope", ""),
                     "decision_status": row.get("current_decision_status", row.get("decision_status", "")),
                     "review_reason_code": row.get("review_reason_code", ""),
+                    "triage_status": row.get("triage_status", ""),
+                    "used_label_gap": row.get("used_label_gap", False),
+                    "llm_invoked": row.get("llm_invoked", False),
+                    "llm_failed": row.get("llm_failed", False),
                 },
                 "source_text": row.get("source_text", ""),
                 "file_path": row.get("file_path", ""),
