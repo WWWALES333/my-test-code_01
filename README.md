@@ -1,7 +1,7 @@
 # 销售周报自动下载与分类系统
 
 当前封板版本：`V1.5`（2026-05-16）
-下一开发版本：`v1.6`（待规划）
+当前开发版本：`v1.6`（AI 一线情报工作台质量提升版）
 
 ## 项目结构
 
@@ -11,7 +11,8 @@ my-test-code_01/
 │   ├── main.py
 │   ├── analysis_v13/        # v1.3 离线分析模块（MVP）
 │   ├── analysis_v14/        # v1.4 离线分析模块（试运行）
-│   └── analysis_v15/        # v1.5 AI 一线情报工作台
+│   ├── analysis_v15/        # v1.5 AI 一线情报工作台
+│   └── analysis_v16/        # v1.6 业务问题层、复核学习、Minimax 适配
 ├── docs/                    # 长期文档、版本文档、截图、参考资料
 │   ├── 01_business_context.md
 │   ├── 02_domain_glossary.md
@@ -23,14 +24,16 @@ my-test-code_01/
 │       ├── v1.2/
 │       ├── v1.3/
 │       ├── v1.4/
-│       └── v1.5/
+│       ├── v1.5/
+│       └── v1.6/
 ├── data/
 │   ├── input/
 │   │   ├── config.example.json  # 配置模板（可提交）
 │   │   ├── config.json          # 本地私有配置（已忽略，不提交）
 │   │   ├── v1.3/                # v1.3 冻结样本与标注基线
 │   │   ├── v1.4/                # v1.4 试运行样本与复核记录
-│   │   └── v1.5/                # v1.5 输入基线、复核记录、花名册占位说明
+│   │   ├── v1.5/                # v1.5 输入基线、复核记录、花名册占位说明
+│   │   └── v1.6/                # v1.6 业务问题定义、复核输入与样本占位
 │   └── output/              # 程序运行产物（归档、日志、审计）
 ├── tests/                   # 排查与测试脚本
 ├── requirements.txt
@@ -71,7 +74,30 @@ python -m src.analysis_v15.run \
 open data/output/insights/v1.5/web/overview.html
 ```
 
-> 安全要求：`data/input/config.json`、`.claude/settings.local.json`、`data/input/v1.5/roster/*.xlsx` 含本地敏感信息或人员主数据，禁止提交到 GitHub。
+7. 运行 `v1.6` 质量提升版（mock 模式）：
+```bash
+python -m src.analysis_v16.run \
+  --samples "data/output/sales_reports/06 销售周报/2026" \
+  --annotations data/input/v1.6/annotations \
+  --out data/output/insights/v1.6 \
+  --model-mode mock
+```
+
+8. 启动 `v1.6` 本地复核工作台：
+```bash
+python -m src.analysis_v16.webapp --data data/output/insights/v1.6
+```
+
+然后打开 `http://127.0.0.1:8766/review`。静态 HTML 可以查看，但提交复核需要通过本地服务。
+
+9. `v1.6` real 模式默认使用 OpenAI 兼容 Minimax 配置：
+```bash
+export OPENAI_BASE_URL=https://api.minimaxi.com/v1
+export OPENAI_MODEL=MiniMax-M2.7
+export OPENAI_API_KEY="从本机 Keychain 或运行时环境变量读取"
+```
+
+> 安全要求：`data/input/config.json`、`.claude/settings.local.json`、`data/input/v1.5/roster/*.xlsx`、`data/input/v1.6/roster/*.xlsx` 含本地敏感信息或人员主数据，禁止提交到 GitHub。
 
 ## 安全发布检查（必做）
 
@@ -98,6 +124,7 @@ python3 tests/check_no_secrets.py
 - `v1.3` 基线文档：`docs/releases/v1.3/`
 - `v1.4` 封板文档：`docs/releases/v1.4/`
 - `v1.5` 封板文档：`docs/releases/v1.5/`
+- `v1.6` 开发文档：`docs/releases/v1.6/`
 
 ## 输出位置
 
@@ -105,7 +132,7 @@ python3 tests/check_no_secrets.py
 - 运行日志：`data/output/runtime/run_log.json`
 - 下载历史：`data/output/runtime/downloaded_history.json`
 - 审计报告：`data/output/audit/reports/`
-- AI 工作台产物：`data/output/insights/v1.5*/`
+- AI 工作台产物：`data/output/insights/v1.5*/`、`data/output/insights/v1.6/`
 
 ## 数据基线
 
