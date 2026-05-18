@@ -114,6 +114,7 @@ def _refresh_learning_outputs(data_dir: Path) -> None:
 def _build_pages(data_dir: Path):
     normalized = data_dir / "normalized"
     summary = _read_json(normalized / "business_question_summary.json", {})
+    executive_brief = _read_json(normalized / "executive_brief.json", {})
     facts = _read_jsonl(normalized / "business_question_facts.jsonl")
     insights = _read_jsonl(normalized / "business_insights.jsonl")
     dashboard = _read_json(normalized / "dashboard_snapshot.json", {})
@@ -123,6 +124,7 @@ def _build_pages(data_dir: Path):
     return build_workbench_pages(
         dashboard_snapshot=dashboard,
         business_summary=summary,
+        executive_brief=executive_brief,
         business_facts=facts,
         business_insights=insights,
         review_batch=review_batch,

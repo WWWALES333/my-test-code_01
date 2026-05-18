@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import html
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
 from .schema import (
     ACTIONABILITY_LABELS,
+    BUSINESS_QUESTION_COMPETITOR_AI,
+    BUSINESS_QUESTION_DOCTOR_ACCEPTANCE,
+    BUSINESS_QUESTION_DOCTOR_DIRECT_NEED,
+    BUSINESS_QUESTION_DOCTOR_INDIRECT_OPPORTUNITY,
     BUSINESS_QUESTION_LABELS,
+    BUSINESS_QUESTION_REGIONAL_SALES_DIFF,
+    BUSINESS_QUESTION_SALES_AI_USAGE,
     BUSINESS_QUESTION_VALUES,
     COMPETITOR_SIGNAL_LABELS,
     DOCTOR_ACCEPTANCE_LABELS,
@@ -40,14 +47,34 @@ def write_web_pages(path: Path, pages: Dict[str, str]) -> None:
 
 
 def build_weekly_brief(
+    executive_brief: Dict[str, object],
     business_summary: Dict[str, object],
     business_insights: Sequence[Dict[str, object]],
     review_batch: Sequence[Dict[str, object]],
+    dashboard_snapshot: Dict[str, object] | None = None,
 ) -> str:
+    snapshot = dashboard_snapshot or {}
+    data_range = snapshot.get("data_range", {}) if isinstance(snapshot.get("data_range", {}), dict) else {}
+    latest_period = snapshot.get("latest_year_month", "") or snapshot.get("latest_year_week", "")
     lines = [
-        "# AI 一线情报周度摘要",
+        "# AI 一线情报业务摘要",
         "",
-        "## 本期判断",
+        "## 分析口径",
+        f"- 数据窗口：{data_range.get('start_month', '未知')} 至 {data_range.get('end_month', '未知')}",
+        f"- 当前默认观察期：{latest_period or '未知'}",
+        "- 口径说明：本摘要基于已归档销售周报/月报中的 AI 相关证据生成；高待复核主题只作为观察，不作为确定结论。",
+        "",
+        "## 一句话判断",
+        f"- {executive_brief.get('headline', '当前证据仍需复核后再形成正式判断。')}",
+        "",
+        "## 这周要回答的 5 个问题",
+        f"- 医生 AI 接纳度：{executive_brief.get('doctor_acceptance_answer', '')}",
+        f"- 区域 / 销售差异：{executive_brief.get('standout_answer', '')}",
+        f"- 医生直接诉求：{executive_brief.get('direct_need_answer', '')}",
+        f"- 医生间接机会：{executive_brief.get('indirect_opportunity_answer', '')}",
+        f"- 销售 / 竞品动作：{executive_brief.get('sales_and_competitor_answer', '')}",
+        "",
+        "## 证据规模",
         f"- 业务证据：{business_summary.get('total_business_evidence', 0)} 条",
         f"- 需复核证据：{business_summary.get('review_needed_count', 0)} 条",
         f"- 可行动证据：{business_summary.get('actionable_count', 0)} 条",
@@ -58,10 +85,17 @@ def build_weekly_brief(
         lines.append(f"- {BUSINESS_QUESTION_LABELS.get(key, key)}：{count}")
     lines.extend(["", "## 重点洞察"])
     for insight in business_insights[:8]:
-        lines.append(
-            f"- {insight.get('title', '')}：{insight.get('judgement', '')} "
-            f"{insight.get('why_it_matters', '')} 建议：{insight.get('action_recommendation', '')}"
-        )
+        lines.append(f"- {insight.get('insight_title', insight.get('title', ''))}：{insight.get('conclusion', '')}")
+        lines.append(f"  建议：{insight.get('action_recommendation', '')}")
+        quotes = insight.get("representative_quotes", [])
+        if isinstance(quotes, list) and quotes:
+            first = quotes[0] if isinstance(quotes[0], dict) else {"quote": str(quotes[0])}
+            quote_text = str(first.get("quote", "")).strip()
+            meta = " / ".join(str(first.get(key, "")).strip() for key in ("salesperson", "region", "period") if str(first.get(key, "")).strip())
+            if quote_text:
+                lines.append(f"  代表原文：{quote_text[:180]}")
+                if meta:
+                    lines.append(f"  来源：{meta}")
     lines.extend(["", "## 本轮复核"])
     open_tasks = [row for row in review_batch if str(row.get("task_status", "")) == "open"]
     if open_tasks:
@@ -74,6 +108,7 @@ def build_weekly_brief(
 def build_workbench_pages(
     dashboard_snapshot: Dict[str, object],
     business_summary: Dict[str, object],
+    executive_brief: Dict[str, object],
     business_facts: Sequence[Dict[str, object]],
     business_insights: Sequence[Dict[str, object]],
     review_batch: Sequence[Dict[str, object]],
@@ -81,8 +116,8 @@ def build_workbench_pages(
     salesperson_profiles: Sequence[Dict[str, object]],
 ) -> Dict[str, str]:
     pages = {
-        "overview.html": _page("overview", "AI 一线情报工作台 V1.6", _overview(dashboard_snapshot, business_summary, business_insights)),
-        "trends.html": _page("trends", "趋势中心", _trends(dashboard_snapshot, trend_cube, business_summary)),
+        "overview.html": _page("overview", "AI 一线情报工作台 V1.6", _overview(dashboard_snapshot, business_summary, executive_brief, business_insights)),
+        "trends.html": _page("trends", "趋势中心", _trends(dashboard_snapshot, trend_cube, business_summary, business_insights)),
         "sales.html": _page("sales", "销售画像", _sales(salesperson_profiles, business_facts)),
         "insights.html": _page("insights", "洞察中心", _insights(business_insights)),
         "review.html": _page("review", "复核学习工作台", _review(review_batch), extra_script=_review_script()),
@@ -145,6 +180,19 @@ def _page(current: str, title: str, body: str, *, extra_script: str = "") -> str
     .cols-3 {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
     .cols-2 {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
     .panel {{ background:rgba(255,253,248,.9); border:1px solid var(--line); border-radius:24px; box-shadow:var(--shadow); padding:22px; }}
+    .hero {{ background:linear-gradient(135deg,#123c34 0%,#1f6b5b 58%,#b45f2a 140%); color:#fff; border:0; }}
+    .hero .muted,.hero .label {{ color:rgba(255,255,255,.74); }}
+    .hero > .lead {{ color:rgba(255,255,255,.82); }}
+    .hero .panel {{ color:var(--ink); background:rgba(255,253,248,.9); }}
+    .hero .panel .label {{ color:var(--muted); }}
+    .hero .panel .muted {{ color:var(--muted); }}
+    .answer-card {{ min-height:210px; display:flex; flex-direction:column; justify-content:space-between; }}
+    .answer-card strong {{ font-size:18px; letter-spacing:-.02em; }}
+    .answer-card p {{ line-height:1.72; }}
+    .insight-card {{ display:flex; flex-direction:column; gap:10px; }}
+    .quote-list {{ display:grid; gap:10px; margin-top:12px; }}
+    .quote-item {{ border-left:3px solid var(--accent-2); padding:10px 0 10px 12px; color:#39433f; line-height:1.65; background:rgba(255,250,241,.72); border-radius:0 12px 12px 0; }}
+    .small-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }}
     .metric {{ font-size:34px; font-weight:850; letter-spacing:-.04em; }}
     .label {{ color:var(--muted); font-size:13px; font-weight:700; margin-top:4px; }}
     .tag {{ display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:6px 10px; background:var(--soft); color:var(--accent); font-size:12px; font-weight:800; margin:2px 6px 2px 0; }}
@@ -187,58 +235,94 @@ def _page(current: str, title: str, body: str, *, extra_script: str = "") -> str
 </html>"""
 
 
-def _overview(snapshot: Dict[str, object], summary: Dict[str, object], insights: Sequence[Dict[str, object]]) -> str:
+def _overview(
+    snapshot: Dict[str, object],
+    summary: Dict[str, object],
+    executive_brief: Dict[str, object],
+    insights: Sequence[Dict[str, object]],
+) -> str:
+    insight_map = _insight_map(insights)
+    data_range = snapshot.get("data_range", {}) if isinstance(snapshot.get("data_range", {}), dict) else {}
+    latest_month = snapshot.get("latest_year_month", "") or "未知"
+    latest_week = snapshot.get("latest_year_week", "") or "未知"
     return f"""
-    <h1>本期判断总览</h1>
-    <p class="lead">按业务问题组织，而不是按标签堆叠。优先回答医生接纳度、医生诉求、销售使用 AI、竞品动作和需要复核的边界样本。</p>
-    <section class="grid cols-4">
-      {_metric("业务证据", summary.get("total_business_evidence", 0), "进入 v1.6 业务问题层的证据")}
-      {_metric("待复核", summary.get("review_needed_count", 0), "需要进入 20 条一轮复核")}
-      {_metric("可行动", summary.get("actionable_count", 0), "可进报告或行动池")}
-      {_metric("活跃销售", snapshot.get("active_sales_count", 0), "归一后的销售对象")}
+    <section class="panel hero">
+      <h1>本期业务判断总览</h1>
+      <p class="lead">{_e(executive_brief.get('headline', '当前证据仍需复核后再形成正式判断。'))}</p>
+      <p class="lead">分析窗口：{_e(data_range.get('start_month', '未知'))} 至 {_e(data_range.get('end_month', '未知'))}；默认观察月：{_e(latest_month)}；默认观察周：{_e(latest_week)}。</p>
+      <div class="grid cols-4">
+        {_metric("业务证据", summary.get("total_business_evidence", 0), "进入业务问题层的原文证据")}
+        {_metric("待复核", summary.get("review_needed_count", 0), "需要进入 20 条一轮复核")}
+        {_metric("可行动", summary.get("actionable_count", 0), "可进报告或行动池")}
+        {_metric("活跃销售", snapshot.get("active_sales_count", 0), "归一后的销售对象")}
+      </div>
     </section>
-    <section class="panel" style="margin-top:20px">
-      <h2>核心业务问题</h2>
-      <div>{_breakdown(summary.get("business_question_breakdown", {}), BUSINESS_QUESTION_LABELS)}</div>
+    <h1 style="margin-top:30px">5 个必须回答的问题</h1>
+    <p class="lead">这里不是指标罗列，而是把当前证据翻译成产品负责人和销售管理者能判断的业务问题。</p>
+    <section class="grid cols-2">
+      {_answer_card("医生对 AI 的接纳度发生了什么？", executive_brief.get("doctor_acceptance_answer", ""), insight_map.get(BUSINESS_QUESTION_DOCTOR_ACCEPTANCE, {}))}
+      {_answer_card("哪些区域 / 销售个人更突出？", executive_brief.get("standout_answer", ""), insight_map.get(BUSINESS_QUESTION_REGIONAL_SALES_DIFF, {}))}
+      {_answer_card("医生直接诉求是什么？", executive_brief.get("direct_need_answer", ""), insight_map.get(BUSINESS_QUESTION_DOCTOR_DIRECT_NEED, {}))}
+      {_answer_card("哪些是间接 AI 机会？", executive_brief.get("indirect_opportunity_answer", ""), insight_map.get(BUSINESS_QUESTION_DOCTOR_INDIRECT_OPPORTUNITY, {}))}
+      {_answer_card("销售使用和竞品动作有什么变化？", executive_brief.get("sales_and_competitor_answer", ""), insight_map.get(BUSINESS_QUESTION_SALES_AI_USAGE, {}), wide=True)}
     </section>
     <section class="grid cols-2" style="margin-top:20px">
-      {''.join(_insight_card(item) for item in insights[:4])}
+      <div class="panel">
+        <h2>优先机会</h2>
+        {_list_items(executive_brief.get("top_opportunities", []))}
+      </div>
+      <div class="panel">
+        <h2>当前风险</h2>
+        {_list_items(executive_brief.get("top_risks", []))}
+      </div>
+    </section>
+    <section class="panel" style="margin-top:20px">
+      <h2>业务问题分布</h2>
+      <div>{_breakdown(summary.get("business_question_breakdown", {}), BUSINESS_QUESTION_LABELS)}</div>
     </section>
     """
 
 
-def _trends(snapshot: Dict[str, object], trend_cube: Sequence[Dict[str, object]], summary: Dict[str, object]) -> str:
+def _trends(
+    snapshot: Dict[str, object],
+    trend_cube: Sequence[Dict[str, object]],
+    summary: Dict[str, object],
+    insights: Sequence[Dict[str, object]],
+) -> str:
     monthly = [row for row in trend_cube if str(row.get("grain", "")) == "month"][-12:]
     weekly = [row for row in trend_cube if str(row.get("grain", "")) == "week"][-12:]
+    insight_rows = sorted(insights, key=lambda item: int(item.get("display_order", 99)))
     return f"""
     <h1>趋势中心</h1>
-    <p class="lead">当前版本先把周/月时间维度显性化，后续继续增强筛选和同比环比交互。</p>
-    <section class="grid cols-3">
+    <p class="lead">趋势页必须解释变化，而不是只展示数量。当前默认展示月度、周度和每类业务问题的趋势解释。</p>
+    <section class="grid cols-4">
       {_metric("最新月", snapshot.get("latest_month", ""), "默认月度窗口")}
       {_metric("最新周", snapshot.get("latest_week", ""), "默认周度窗口")}
       {_metric("证据总量", summary.get("total_business_evidence", 0), "业务问题层证据")}
+      {_metric("待复核", summary.get("review_needed_count", 0), "影响趋势可信度")}
     </section>
     <section class="grid cols-2" style="margin-top:20px">
       <div class="panel"><h2>近 12 个月</h2>{_period_table(monthly)}</div>
       <div class="panel"><h2>近 12 周</h2>{_period_table(weekly)}</div>
     </section>
-    <section class="panel" style="margin-top:20px">
-      <h2>医生接纳度结构</h2>
-      {_breakdown(summary.get("doctor_acceptance_breakdown", {}), DOCTOR_ACCEPTANCE_LABELS)}
+    <section class="grid cols-2" style="margin-top:20px">
+      {''.join(_trend_explain_card(item) for item in insight_rows)}
     </section>
     """
 
 
 def _sales(profiles: Sequence[Dict[str, object]], facts: Sequence[Dict[str, object]]) -> str:
     top = sorted(profiles, key=lambda item: -int(item.get("total_mentions", 0)))[:20]
+    fact_by_sales: Dict[str, List[Dict[str, object]]] = {}
+    for row in facts:
+        name = str(row.get("salesperson_name", "")).strip()
+        if name:
+            fact_by_sales.setdefault(name, []).append(row)
     return f"""
     <h1>销售画像</h1>
-    <p class="lead">销售个人是最小动作单元。这里优先展示提及趋势和业务问题贡献，避免只看区域汇总。</p>
-    <section class="panel">
-      <h2>高频销售 / 医助样例</h2>
-      <table class="table"><thead><tr><th>姓名</th><th>战区/区域</th><th>AI证据</th><th>医生反馈</th><th>分层</th></tr></thead><tbody>
-      {''.join(f"<tr><td>{_e(row.get('display_name',''))}</td><td>{_e(row.get('battle_zone_name',''))}/{_e(row.get('region_name',''))}</td><td>{row.get('total_mentions',0)}</td><td>{row.get('doctor_feedback_mentions',0)}</td><td>{_e(row.get('segment',''))}</td></tr>" for row in top)}
-      </tbody></table>
+    <p class="lead">销售个人是最小动作单元。这里不只看排行榜，而是看每个人贡献了什么类型的 AI 信号，是否有医生反馈、是否值得沉淀案例。</p>
+    <section class="grid cols-2">
+      {''.join(_sales_profile_card(row, fact_by_sales.get(str(row.get("display_name", "")), [])) for row in top[:12])}
     </section>
     """
 
@@ -246,7 +330,7 @@ def _sales(profiles: Sequence[Dict[str, object]], facts: Sequence[Dict[str, obje
 def _insights(insights: Sequence[Dict[str, object]]) -> str:
     return f"""
     <h1>洞察中心</h1>
-    <p class="lead">洞察卡必须说明发生了什么、为什么重要、建议怎么处理，并能回到代表证据。</p>
+    <p class="lead">洞察卡必须说明发生了什么、为什么重要、建议怎么处理，并能回到代表证据。低可信洞察会明确标注，不包装成确定结论。</p>
     <section class="grid cols-2">
       {''.join(_insight_card(item) for item in insights)}
     </section>
@@ -283,6 +367,44 @@ def _metric(label: str, value: object, note: str) -> str:
     return f"<div class='panel'><div class='metric'>{_e(value)}</div><div class='label'>{_e(label)}</div><p class='muted'>{_e(note)}</p></div>"
 
 
+def _answer_card(title: str, answer: object, insight: Dict[str, object], *, wide: bool = False) -> str:
+    style = " style='grid-column:1 / -1'" if wide else ""
+    quote = _first_quote(insight)
+    return f"""
+    <article class="panel answer-card"{style}>
+      <div>
+        <strong>{_e(title)}</strong>
+        <p>{_e(answer or '当前证据不足，需要先完成复核。')}</p>
+      </div>
+      <div>
+        <div class="tag">{_e(insight.get('confidence_label', '待判断'))}</div>
+        <div class="tag">证据 {_e(insight.get('evidence_count', 0))} 条</div>
+        <div class="tag warn">待复核 {_e(insight.get('review_needed_count', 0))} 条</div>
+        {quote}
+      </div>
+    </article>
+    """
+
+
+def _first_quote(insight: Dict[str, object]) -> str:
+    quotes = insight.get("representative_quotes", [])
+    if not isinstance(quotes, list) or not quotes:
+        return ""
+    first = quotes[0] if isinstance(quotes[0], dict) else {"quote": str(quotes[0])}
+    return (
+        "<div class='quote-item'>"
+        f"{_e(first.get('quote', ''))}"
+        f"<div class='label'>{_e(first.get('salesperson', ''))} · {_e(first.get('region', ''))} · {_e(first.get('period', ''))}</div>"
+        "</div>"
+    )
+
+
+def _list_items(items: object) -> str:
+    if not isinstance(items, list) or not items:
+        return "<p class='muted'>暂无</p>"
+    return "<ul>" + "".join(f"<li>{_e(item)}</li>" for item in items[:5]) + "</ul>"
+
+
 def _breakdown(payload: object, labels: Dict[str, str]) -> str:
     if not isinstance(payload, dict) or not payload:
         return "<p class='muted'>暂无数据</p>"
@@ -301,15 +423,114 @@ def _period_table(rows: Sequence[Dict[str, object]]) -> str:
 
 def _insight_card(item: Dict[str, object]) -> str:
     return f"""
-    <article class="panel">
-      <div class="tag">{_e(item.get('confidence_level',''))}</div>
-      <div class="card-title">{_e(item.get('title',''))}</div>
-      <p>{_e(item.get('judgement',''))}</p>
-      <p class="muted">{_e(item.get('why_it_matters',''))}</p>
-      <p><strong>建议：</strong>{_e(item.get('action_recommendation',''))}</p>
-      <div class="label">证据 {item.get('evidence_count',0)} 条｜待复核 {item.get('review_needed_count',0)} 条</div>
+    <article class="panel insight-card">
+      <div>
+        <span class="tag">{_e(item.get('confidence_label','待判断'))}</span>
+        <span class="tag">证据 {_e(item.get('evidence_count',0))} 条</span>
+        <span class="tag warn">待复核 {_e(item.get('review_needed_count',0))} 条</span>
+      </div>
+      <div class="card-title">{_e(item.get('insight_title', item.get('title','')))}</div>
+      <p>{_e(item.get('conclusion', item.get('judgement','')))}</p>
+      <p class="muted"><strong>为什么重要：</strong>{_e(item.get('why_it_matters',''))}</p>
+      <p><strong>建议动作：</strong>{_e(item.get('action_recommendation',''))}</p>
+      <p class="muted"><strong>可信度限制：</strong>{_e(item.get('caveats',''))}</p>
+      <div class="label">代表原文</div>
+      <div class="quote-list">{_quote_list(item.get('representative_quotes', []))}</div>
+      <div class="small-grid">
+        <div>{_rank_list('突出区域', item.get('top_regions', []))}</div>
+        <div>{_rank_list('相关销售', item.get('top_sales', []))}</div>
+      </div>
     </article>
     """
+
+
+def _trend_explain_card(item: Dict[str, object]) -> str:
+    return f"""
+    <article class="panel">
+      <div class="card-title">{_e(item.get('title',''))}</div>
+      <p>{_e(item.get('trend_sentence',''))}</p>
+      <p class="muted">{_e(item.get('driver_sentence',''))}</p>
+      <div>{_breakdown(item.get('breakdown', {}), {})}</div>
+      <div class="label">可信度：{_e(item.get('confidence_label','待判断'))}｜证据 {_e(item.get('evidence_count',0))} 条</div>
+    </article>
+    """
+
+
+def _sales_profile_card(profile: Dict[str, object], facts: Sequence[Dict[str, object]]) -> str:
+    question_counts = Counter(BUSINESS_QUESTION_LABELS.get(str(row.get("business_question", "")), str(row.get("business_question", ""))) for row in facts)
+    doctor_feedback = sum(1 for row in facts if str(row.get("business_question", "")) in {BUSINESS_QUESTION_DOCTOR_ACCEPTANCE, BUSINESS_QUESTION_DOCTOR_DIRECT_NEED, BUSINESS_QUESTION_DOCTOR_INDIRECT_OPPORTUNITY})
+    review_count = sum(1 for row in facts if bool(row.get("should_review", False)))
+    quote = _quote_list([_quote_payload_for_reporter(row) for row in facts[:1]])
+    return f"""
+    <article class="panel">
+      <div class="card-title">{_e(profile.get('display_name',''))}</div>
+      <p class="muted">{_e(profile.get('battle_zone_name',''))} / {_e(profile.get('region_name',''))} · {_e(profile.get('segment',''))}</p>
+      <div class="small-grid">
+        {_mini_metric("AI证据", profile.get("total_mentions", 0))}
+        {_mini_metric("医生反馈", doctor_feedback or profile.get("doctor_feedback_mentions", 0))}
+        {_mini_metric("待复核", review_count)}
+        {_mini_metric("主要方向", _dominant_label(question_counts))}
+      </div>
+      <div style="margin-top:12px">{_breakdown(dict(question_counts.most_common(4)), {})}</div>
+      {quote}
+    </article>
+    """
+
+
+def _mini_metric(label: str, value: object) -> str:
+    return f"<div class='field'><div class='label'>{_e(label)}</div><strong>{_e(value)}</strong></div>"
+
+
+def _quote_list(quotes: object) -> str:
+    if not isinstance(quotes, list) or not quotes:
+        return "<p class='muted'>暂无代表原文</p>"
+    rows = []
+    for item in quotes[:3]:
+        payload = item if isinstance(item, dict) else {"quote": str(item)}
+        rows.append(
+            "<div class='quote-item'>"
+            f"{_e(payload.get('quote', ''))}"
+            f"<div class='label'>{_e(payload.get('salesperson', ''))} · {_e(payload.get('region', ''))} · {_e(payload.get('period', ''))}</div>"
+            "</div>"
+        )
+    return "".join(rows)
+
+
+def _rank_list(title: str, rows: object) -> str:
+    if not isinstance(rows, list) or not rows:
+        return f"<p class='muted'>{_e(title)}：暂无</p>"
+    body = "、".join(f"{_e(row.get('name',''))}({_e(row.get('count',0))})" for row in rows[:3] if isinstance(row, dict))
+    return f"<p class='muted'><strong>{_e(title)}：</strong>{body or '暂无'}</p>"
+
+
+def _insight_map(insights: Sequence[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
+    return {str(item.get("business_question", "")): item for item in insights}
+
+
+def _dominant_label(counter: Counter) -> str:
+    if not counter:
+        return "暂无"
+    return counter.most_common(1)[0][0]
+
+
+def _quote_payload_for_reporter(row: Dict[str, object]) -> Dict[str, object]:
+    return {
+        "quote": str(row.get("source_text", ""))[:220],
+        "salesperson": row.get("salesperson_name", ""),
+        "region": row.get("region_name", ""),
+        "period": _period_for_reporter(row),
+    }
+
+
+def _period_for_reporter(row: Dict[str, object]) -> str:
+    year = int(row.get("year", 0) or 0)
+    month = int(row.get("month", 0) or 0)
+    week = int(row.get("week_of_month", 0) or 0)
+    if year and month and week:
+        return f"{year}-{month:02d}-W{week}"
+    if year and month:
+        return f"{year}-{month:02d}"
+    return "未知周期"
 
 
 def _review_card(row: Dict[str, object], idx: int, total: int) -> str:

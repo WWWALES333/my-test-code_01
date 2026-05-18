@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.analysis_v16.business_questions import BusinessQuestionAnalyzer
+from src.analysis_v16.business_questions import BusinessQuestionAnalyzer, build_business_insights, build_executive_brief
 from src.analysis_v16.model_adapter import parse_json_payload, strip_think_blocks
 from src.analysis_v16.review_learning import (
     apply_review_decision,
@@ -78,6 +78,39 @@ class TestAnalysisV16(unittest.TestCase):
         self.assertEqual(len(open_items), 20)
         self.assertEqual(open_items[0]["batch_position"], 1)
         self.assertEqual(open_items[-1]["batch_size"], 20)
+
+    def test_insights_are_business_readable_not_enum_templates(self) -> None:
+        facts = [
+            {
+                **_business_fact(1),
+                "doctor_acceptance_level": "positive_acceptance",
+                "doctor_need_type": "diagnosis_quality",
+                "confidence": 0.86,
+                "should_review": False,
+                "actionability": "report_ready",
+                "source_text": "医生认可平台AI诊疗助手，觉得对辨证准确度和效率都有帮助。",
+            },
+            {
+                **_business_fact(2),
+                "doctor_acceptance_level": "explicit_concern",
+                "doctor_need_type": "trust_and_safety",
+                "confidence": 0.82,
+                "should_review": False,
+                "actionability": "report_ready",
+                "source_text": "医生担心AI辨证不准，后续希望看到更多专业依据。",
+            },
+        ]
+        insights = build_business_insights(facts)
+        brief = build_executive_brief(insights, {"total_business_evidence": 2, "review_needed_count": 0})
+
+        self.assertEqual(len(insights), 1)
+        first = insights[0]
+        self.assertIn("医生", first["conclusion"])
+        self.assertIn("正向接受", json.dumps(first, ensure_ascii=False))
+        self.assertNotIn("positive_acceptance", first["conclusion"])
+        self.assertNotIn("unknown", first["conclusion"])
+        self.assertTrue(first["representative_quotes"])
+        self.assertIn("医生", brief["doctor_acceptance_answer"])
 
     def test_review_decision_writes_learning_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -160,6 +193,12 @@ class TestAnalysisV16(unittest.TestCase):
             self.assertTrue((normalized / "business_question_facts.jsonl").exists())
             self.assertTrue((out / "review" / "review_batch.jsonl").exists())
             self.assertTrue((out / "reports" / "AI一线情报周报.md").exists())
+            overview_html = (out / "web" / "overview.html").read_text(encoding="utf-8")
+            insights_html = (out / "web" / "insights.html").read_text(encoding="utf-8")
+            self.assertIn("5 个必须回答的问题", overview_html)
+            self.assertIn("为什么重要", insights_html)
+            self.assertIn("代表原文", insights_html)
+            self.assertNotIn("external_pitch", overview_html)
             review_html = (out / "web" / "review.html").read_text(encoding="utf-8")
             self.assertIn("/api/v16-review-decisions", review_html)
             self.assertIn("提交并进入下一张", review_html)

@@ -8,7 +8,12 @@ from typing import Dict, List
 
 from src.analysis_v15.run import run_pipeline as run_v15_pipeline
 
-from .business_questions import BusinessQuestionAnalyzer, build_business_insights, summarize_business_questions
+from .business_questions import (
+    BusinessQuestionAnalyzer,
+    build_business_insights,
+    build_executive_brief,
+    summarize_business_questions,
+)
 from .reporter import build_weekly_brief, build_workbench_pages, write_json, write_jsonl, write_markdown, write_web_pages
 from .review_learning import (
     apply_review_decisions_to_facts,
@@ -26,6 +31,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-mode", choices=["mock", "real"], default="mock", help="模型模式")
     parser.add_argument("--llm-concurrency", type=int, default=4, help="v1.5 基础识别 real 模式并发度")
     parser.add_argument("--llm-chunk-size", type=int, default=50, help="v1.5 基础识别 real 模式分块大小")
+    parser.add_argument("--insight-mode", choices=["mock", "real"], default="mock", help="洞察归纳模式；real 只对证据簇调用模型")
+    parser.add_argument("--business-llm-batch-size", type=int, default=4, help="v1.6 业务问题边界判定每批样本数")
+    parser.add_argument("--business-llm-concurrency", type=int, default=2, help="v1.6 业务问题边界判定并发度")
     parser.add_argument("--roster", default="", help="花名册 Excel 路径；为空时沿用 v1.5 自动发现")
     parser.add_argument("--review-batch-size", type=int, default=20, help="每轮主动复核样本数量")
     parser.add_argument("--skip-base", action="store_true", help="跳过 v1.5 基础链路，直接复用当前 out 下 normalized 产物")
@@ -39,6 +47,9 @@ def run_pipeline(
     model_mode: str,
     llm_concurrency: int = 4,
     llm_chunk_size: int = 50,
+    insight_mode: str = "mock",
+    business_llm_batch_size: int = 4,
+    business_llm_concurrency: int = 2,
     roster_path: Path | None = None,
     review_batch_size: int = 20,
     skip_base: bool = False,
@@ -70,12 +81,17 @@ def run_pipeline(
     salesperson_profiles = _read_jsonl(normalized_dir / "salesperson_profile.jsonl")
     dashboard_snapshot = _read_json(normalized_dir / "dashboard_snapshot.json", {})
 
-    analyzer = BusinessQuestionAnalyzer(mode=model_mode)
+    analyzer = BusinessQuestionAnalyzer(
+        mode=model_mode,
+        llm_batch_size=business_llm_batch_size,
+        llm_concurrency=business_llm_concurrency,
+    )
     raw_business_facts = analyzer.analyze_batch(evidence_facts)
     review_decisions = load_review_decisions(review_dir / "review_decisions.jsonl")
     business_facts = apply_review_decisions_to_facts(raw_business_facts, review_decisions)
     business_summary = summarize_business_questions(business_facts)
-    business_insights = build_business_insights(business_facts)
+    business_insights = build_business_insights(business_facts, mode=insight_mode)
+    executive_brief = build_executive_brief(business_insights, business_summary)
 
     review_batch = build_review_batch(business_facts, review_decisions, batch_size=review_batch_size)
     learning_summary, rule_candidates, prompt_candidates, label_candidates, golden_set = build_learning_outputs(review_decisions, review_batch)
@@ -83,6 +99,7 @@ def run_pipeline(
     write_jsonl(normalized_dir / "business_question_facts.jsonl", business_facts)
     write_json(normalized_dir / "business_question_summary.json", business_summary)
     write_jsonl(normalized_dir / "business_insights.jsonl", business_insights)
+    write_json(normalized_dir / "executive_brief.json", executive_brief)
 
     write_jsonl(review_dir / "review_batch.jsonl", review_batch)
     write_markdown(review_dir / "learning_summary.md", learning_summary)
@@ -91,7 +108,7 @@ def run_pipeline(
     write_jsonl(review_dir / "label_gap_candidates.jsonl", label_candidates)
     write_jsonl(review_dir / "golden_set.jsonl", golden_set)
 
-    weekly_brief = build_weekly_brief(business_summary, business_insights, review_batch)
+    weekly_brief = build_weekly_brief(executive_brief, business_summary, business_insights, review_batch, dashboard_snapshot)
     write_markdown(reports_dir / "AI一线情报周报.md", weekly_brief)
     write_markdown(reports_dir / "AI一线情报月报.md", weekly_brief.replace("周度摘要", "月度复盘"))
 
@@ -100,6 +117,7 @@ def run_pipeline(
         build_workbench_pages(
             dashboard_snapshot=dashboard_snapshot,
             business_summary=business_summary,
+            executive_brief=executive_brief,
             business_facts=business_facts,
             business_insights=business_insights,
             review_batch=review_batch,
@@ -116,6 +134,9 @@ def run_pipeline(
         "model_mode": model_mode,
         "llm_concurrency": llm_concurrency,
         "llm_chunk_size": llm_chunk_size,
+        "insight_mode": insight_mode,
+        "business_llm_batch_size": business_llm_batch_size,
+        "business_llm_concurrency": business_llm_concurrency,
         "review_batch_size": review_batch_size,
         "roster": str(roster_path.resolve()) if roster_path else "",
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -161,6 +182,9 @@ def main() -> None:
         model_mode=args.model_mode,
         llm_concurrency=args.llm_concurrency,
         llm_chunk_size=args.llm_chunk_size,
+        insight_mode=args.insight_mode,
+        business_llm_batch_size=args.business_llm_batch_size,
+        business_llm_concurrency=args.business_llm_concurrency,
         roster_path=Path(args.roster) if args.roster else None,
         review_batch_size=args.review_batch_size,
         skip_base=args.skip_base,

@@ -80,7 +80,8 @@ python -m src.analysis_v16.run \
   --samples "data/output/sales_reports/06 销售周报/2026" \
   --annotations data/input/v1.6/annotations \
   --out data/output/insights/v1.6 \
-  --model-mode mock
+  --model-mode mock \
+  --insight-mode mock
 ```
 
 8. 启动 `v1.6` 本地复核工作台：
@@ -95,6 +96,30 @@ python -m src.analysis_v16.webapp --data data/output/insights/v1.6
 export OPENAI_BASE_URL=https://api.minimaxi.com/v1
 export OPENAI_MODEL=MiniMax-M2.7
 export OPENAI_API_KEY="从本机 Keychain 或运行时环境变量读取"
+```
+
+如只想用 Minimax 生成洞察、不触发全量逐条识别，可使用：
+```bash
+python -m src.analysis_v16.run \
+  --samples "data/output/sales_reports/06 销售周报/2026" \
+  --annotations data/input/v1.6/annotations \
+  --out data/output/insights/v1.6 \
+  --model-mode mock \
+  --insight-mode real
+```
+
+如需要启用 `v1.6` 的完整混合识别链路，使用：
+```bash
+OPENAI_BASE_URL=https://api.minimaxi.com/v1 \
+OPENAI_MODEL=MiniMax-M2.7 \
+python -m src.analysis_v16.run \
+  --samples "data/output/sales_reports/06 销售周报/2026" \
+  --annotations data/input/v1.6/annotations \
+  --out data/output/insights/v1.6 \
+  --model-mode real \
+  --insight-mode real \
+  --business-llm-batch-size 4 \
+  --business-llm-concurrency 4
 ```
 
 > 安全要求：`data/input/config.json`、`.claude/settings.local.json`、`data/input/v1.5/roster/*.xlsx`、`data/input/v1.6/roster/*.xlsx` 含本地敏感信息或人员主数据，禁止提交到 GitHub。
