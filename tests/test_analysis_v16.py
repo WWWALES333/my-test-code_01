@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from src.analysis_v16.business_questions import BusinessQuestionAnalyzer, build_business_insights, build_executive_brief
 from src.analysis_v16.model_adapter import parse_json_payload, strip_think_blocks
+from src.analysis_v16.prompt_context import PROMPT_CONTEXT_VERSION, build_prompt_context, render_prompt_reference_markdown
 from src.analysis_v16.review_learning import (
     apply_review_decision,
     apply_review_decisions_to_facts,
+    build_review_feedback,
     build_learning_outputs,
     build_review_batch,
     load_review_decisions,
@@ -21,6 +24,7 @@ from src.analysis_v16.schema import (
     BUSINESS_QUESTION_DOCTOR_ACCEPTANCE,
     BUSINESS_QUESTION_SALES_AI_USAGE,
 )
+from src.analysis_v16.time_windows import compute_time_context
 
 
 class TestAnalysisV16(unittest.TestCase):
@@ -28,6 +32,65 @@ class TestAnalysisV16(unittest.TestCase):
         payload = '<think>先分析但不应进入结果</think>\n说明文字 {"answer": "ok", "score": 0.9}'
         self.assertEqual(strip_think_blocks(payload).strip(), '说明文字 {"answer": "ok", "score": 0.9}')
         self.assertEqual(parse_json_payload(payload), {"answer": "ok", "score": 0.9})
+
+    def test_prompt_context_contains_business_background(self) -> None:
+        context = build_prompt_context()
+        serialized = json.dumps(context, ensure_ascii=False)
+        self.assertEqual(context["context_version"], PROMPT_CONTEXT_VERSION)
+        self.assertIn("云诊室", serialized)
+        self.assertIn("云管家", serialized)
+        self.assertIn("销售", serialized)
+        self.assertIn("医生反馈", serialized)
+        prompt_doc = render_prompt_reference_markdown()
+        self.assertIn(PROMPT_CONTEXT_VERSION, prompt_doc)
+
+    def test_time_context_uses_system_date_target_not_latest_data(self) -> None:
+        trend_cube = [
+            {"grain": "month", "year": 2026, "month": 3, "ai_mentions": 10, "active_sales_count": 3},
+            {"grain": "week", "year": 2026, "month": 3, "week_of_month": 4, "ai_mentions": 5, "active_sales_count": 2},
+        ]
+        context = compute_time_context(trend_cube, today=date(2026, 5, 18))
+        self.assertEqual(context["target_month"], "2026-04")
+        self.assertEqual(context["target_week"], "2026-05-W2")
+        self.assertEqual(context["latest_available_month"], "2026-03")
+        self.assertFalse(context["month_observation"]["available"])
+        self.assertIn("2026-04", context["month_observation"]["status_note"])
+
+    def test_llm_prompt_contains_business_context_and_role_fields(self) -> None:
+        client = _FakeModelClient(
+            {
+                "business_question": BUSINESS_QUESTION_DOCTOR_ACCEPTANCE,
+                "doctor_acceptance_level": "interest_exploration",
+                "doctor_need_type": "unknown",
+                "sales_ai_usage_type": "not_applicable",
+                "competitor_signal_type": "not_applicable",
+                "speaker_role": "doctor_or_clinic_user",
+                "business_actor": "doctor",
+                "evidence_type": "doctor_feedback",
+                "actionability": "report_ready",
+                "confidence": 0.77,
+                "should_review": False,
+                "reason": "医生在反馈云诊室 AI 体验。",
+                "reasoning_summary": "医生表达了对平台 AI 的兴趣，属于医生反馈。",
+            }
+        )
+        analyzer = BusinessQuestionAnalyzer(mode="real", model_client=client)
+        result = analyzer.analyze(
+            {
+                "evidence_id": "E101",
+                "source_text": "医生想了解平台AI诊疗助手是否能帮助提升问诊效率。",
+                "actor_primary": "待判断",
+                "ai_scope": "product_ai",
+                "business_line": "待判断",
+                "decision_status": "pending_human_review",
+            }
+        )
+        prompt_text = json.dumps(client.last_messages, ensure_ascii=False)
+        self.assertIn("project_business_context", prompt_text)
+        self.assertIn("云诊室", prompt_text)
+        self.assertIn("speaker_role", prompt_text)
+        self.assertEqual(result["speaker_role"], "doctor_or_clinic_user")
+        self.assertEqual(result["evidence_type"], "doctor_feedback")
 
     def test_business_question_rules_cover_core_scenarios(self) -> None:
         analyzer = BusinessQuestionAnalyzer(mode="mock")
@@ -140,7 +203,18 @@ class TestAnalysisV16(unittest.TestCase):
             decisions = load_review_decisions(review_dir / "review_decisions.jsonl")
             self.assertEqual(len(decisions), 1)
             summary, rule_candidates, prompt_candidates, label_candidates, golden_set = build_learning_outputs(decisions, [task])
+            feedback = build_review_feedback(
+                next(iter(decisions.values())),
+                decisions,
+                rule_candidates=rule_candidates,
+                prompt_candidates=prompt_candidates,
+                label_candidates=label_candidates,
+                golden_set=golden_set,
+            )
             self.assertIn("已复核样本数：1", summary)
+            self.assertIn("复核 1 条即可写回生效", summary)
+            self.assertIn("立即生效", feedback["saved_message"])
+            self.assertEqual(feedback["same_reason_count"], 1)
             self.assertEqual(rule_candidates, [])
             self.assertEqual(label_candidates, [])
             self.assertEqual(len(golden_set), 1)
@@ -196,12 +270,20 @@ class TestAnalysisV16(unittest.TestCase):
             overview_html = (out / "web" / "overview.html").read_text(encoding="utf-8")
             insights_html = (out / "web" / "insights.html").read_text(encoding="utf-8")
             self.assertIn("5 个必须回答的问题", overview_html)
+            self.assertIn("2026-04", overview_html)
+            self.assertIn("<svg", overview_html)
             self.assertIn("为什么重要", insights_html)
+            self.assertIn("产品含义", insights_html)
+            self.assertIn("销售管理含义", insights_html)
             self.assertIn("代表原文", insights_html)
             self.assertNotIn("external_pitch", overview_html)
+            self.assertTrue((normalized / "prompt_context.json").exists())
+            self.assertTrue((normalized / "time_context.json").exists())
+            self.assertTrue((out / "reports" / "当前使用Prompt说明.md").exists())
             review_html = (out / "web" / "review.html").read_text(encoding="utf-8")
             self.assertIn("/api/v16-review-decisions", review_html)
             self.assertIn("提交并进入下一张", review_html)
+            self.assertIn("复核 1 条也会立即写回生效", review_html)
 
 
 def _business_fact(idx: int) -> dict[str, object]:
@@ -219,6 +301,10 @@ def _business_fact(idx: int) -> dict[str, object]:
         "actionability": "report_ready" if idx % 2 == 0 else "observe",
         "confidence": 0.35 if idx % 3 == 0 else 0.72,
         "should_review": idx % 3 == 0,
+        "speaker_role": "doctor_or_clinic_user",
+        "business_actor": "doctor",
+        "evidence_type": "doctor_feedback",
+        "reasoning_summary": "测试样本。",
         "source_text": f"医生反馈样本 {idx}，提到AI诊疗助手需要进一步确认真实态度。",
         "file_path": f"/tmp/report-{idx}.docx",
         "year": 2026,
@@ -228,6 +314,16 @@ def _business_fact(idx: int) -> dict[str, object]:
         "battle_zone_name": "一战区",
         "region_name": "广东区域",
     }
+
+
+class _FakeModelClient:
+    def __init__(self, response: dict[str, object]) -> None:
+        self.response = response
+        self.last_messages = None
+
+    def chat_json(self, messages, max_tokens=900):  # noqa: ANN001, ANN201
+        self.last_messages = messages
+        return self.response
 
 
 def _evidence_fact() -> dict[str, object]:

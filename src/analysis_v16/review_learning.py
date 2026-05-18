@@ -111,6 +111,50 @@ def build_learning_outputs(
     return summary, rule_candidates, prompt_candidates, label_candidates, golden_set
 
 
+def build_review_feedback(
+    decision: Dict[str, object],
+    decisions: Dict[str, Dict[str, object]],
+    *,
+    rule_candidates: Sequence[Dict[str, object]] | None = None,
+    prompt_candidates: Sequence[Dict[str, object]] | None = None,
+    label_candidates: Sequence[Dict[str, object]] | None = None,
+    golden_set: Sequence[Dict[str, object]] | None = None,
+) -> Dict[str, object]:
+    """把一次复核提交翻译成用户可读的即时反馈。
+
+    用户只做业务判断；系统自动说明这条复核会如何进入学习闭环。
+    """
+    reason = str(decision.get("system_inferred_error_reason", "") or "other")
+    update_type = str(decision.get("system_inferred_update_type", "") or "observe")
+    same_reason_count = sum(1 for row in decisions.values() if str(row.get("system_inferred_error_reason", "")) == reason)
+    next_threshold = _feedback_threshold(same_reason_count)
+    used_in = ["下一轮分析会用 final_fields 覆盖当前系统判断", "本条会进入黄金样本候选"]
+    if update_type == "prompt":
+        used_in.append("同时进入 Prompt 优化候选池")
+    elif update_type == "rule":
+        used_in.append("同时进入规则拦截候选池")
+    elif update_type in {"annotation", "label_gap"}:
+        used_in.append("同时进入标签/标注口径候选池")
+    else:
+        used_in.append("暂作为观察样本累计")
+    return {
+        "saved_message": "已保存，本条复核立即生效；不需要等 20 条才有价值。",
+        "error_reason": reason,
+        "error_reason_label": _error_reason_label(reason),
+        "update_type": update_type,
+        "update_type_label": _update_type_label(update_type),
+        "same_reason_count": same_reason_count,
+        "next_threshold": next_threshold,
+        "how_it_will_be_used": "；".join(used_in),
+        "candidate_counts": {
+            "rule": len(rule_candidates or []),
+            "prompt": len(prompt_candidates or []),
+            "label_gap": len(label_candidates or []),
+            "golden_set": len(golden_set or []),
+        },
+    }
+
+
 def validate_review_payload(task: Dict[str, object], reviewed_fields: Dict[str, object]) -> List[str]:
     errors: List[str] = []
     if not str(reviewed_fields.get("business_value", "")).strip():
@@ -296,6 +340,7 @@ def _build_learning_summary(
         "# v1.6 复核学习摘要",
         "",
         f"- 已复核样本数：{len(rows)}",
+        "- 机制说明：复核 1 条即可写回生效；累计 5 条同类样本形成优化候选；累计 20 条作为一轮正式回归集。",
         f"- 规则候选：{len(rule_candidates)}",
         f"- Prompt 候选：{len(prompt_candidates)}",
         f"- 标签扩展候选：{len(label_candidates)}",
@@ -316,7 +361,45 @@ def _build_learning_summary(
         lines.append("- 对高频 label_gap 样本评估是否需要扩展标签体系。")
     if not rows:
         lines.append("- 先完成第一轮 20 条复核。")
+    elif len(rows) < 5:
+        lines.append(f"- 已有 {len(rows)} 条复核，已经进入写回和黄金样本候选；还差 {5 - len(rows)} 条可形成第一组候选建议。")
+    elif len(rows) < 20:
+        lines.append(f"- 已达到候选建议阈值；还差 {20 - len(rows)} 条可形成一轮正式回归集。")
+    else:
+        lines.append("- 已达到 20 条正式回归集阈值，可以做一轮规则/Prompt 回归评估。")
     return "\n".join(lines)
+
+
+def _feedback_threshold(count: int) -> str:
+    if count >= 20:
+        return "同类问题已达到 20 条，可作为正式回归集评估。"
+    if count >= 5:
+        return f"同类问题已累计 {count} 条，已达到候选建议阈值；还差 {20 - count} 条形成正式回归集。"
+    return f"同类问题已累计 {count} 条；还差 {5 - count} 条形成一组优化候选。"
+
+
+def _error_reason_label(reason: str) -> str:
+    return {
+        "rule_issue": "规则问题",
+        "prompt_issue": "Prompt/语义理解问题",
+        "label_gap": "标签缺口",
+        "context_missing": "上下文缺失",
+        "low_value_noise": "低价值噪声",
+        "parser_segmentation_issue": "解析/切分问题",
+        "business_definition_gap": "业务定义边界问题",
+        "model_output_format": "模型输出格式问题",
+        "other": "其他/观察",
+    }.get(reason, reason or "其他/观察")
+
+
+def _update_type_label(update_type: str) -> str:
+    return {
+        "rule": "规则候选",
+        "prompt": "Prompt 候选",
+        "annotation": "标注口径候选",
+        "label_gap": "标签扩展候选",
+        "observe": "观察累计",
+    }.get(update_type, update_type or "观察累计")
 
 
 def _normalize_reviewed_fields(current: Dict[str, object], reviewed: Dict[str, object]) -> Dict[str, object]:

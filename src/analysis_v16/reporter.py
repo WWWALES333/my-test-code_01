@@ -213,6 +213,18 @@ def _page(current: str, title: str, body: str, *, extra_script: str = "") -> str
     .form-field label {{ display:block; font-size:13px; color:var(--muted); font-weight:800; margin:0 0 7px; }}
     .status-line {{ color:var(--muted); font-weight:700; margin-top:10px; }}
     .task-hidden {{ display:none; }}
+    .chart {{ width:100%; min-height:180px; }}
+    .chart svg {{ width:100%; height:190px; overflow:visible; }}
+    .axis-label {{ font-size:11px; fill:#697570; }}
+    .line-path {{ fill:none; stroke:var(--accent); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }}
+    .area-path {{ fill:rgba(23,107,91,.12); }}
+    .dot {{ fill:#176b5b; }}
+    .bar-row {{ display:grid; grid-template-columns:150px 1fr 56px; gap:10px; align-items:center; margin:10px 0; }}
+    .bar-track {{ height:12px; border-radius:999px; background:#efe5d4; overflow:hidden; }}
+    .bar-fill {{ height:100%; border-radius:999px; background:linear-gradient(90deg,var(--accent),#72a790); }}
+    .baseline-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:16px; }}
+    .baseline-card {{ border:1px solid var(--line); border-radius:18px; padding:14px; background:rgba(255,250,241,.78); }}
+    .feedback-box {{ margin-top:12px; padding:12px; border-radius:16px; background:#edf4ef; color:var(--accent); font-weight:700; line-height:1.65; }}
     @media (max-width: 920px) {{
       .shell {{ grid-template-columns:1fr; }}
       aside {{ position:static; height:auto; }}
@@ -243,19 +255,33 @@ def _overview(
 ) -> str:
     insight_map = _insight_map(insights)
     data_range = snapshot.get("data_range", {}) if isinstance(snapshot.get("data_range", {}), dict) else {}
-    latest_month = snapshot.get("latest_year_month", "") or "未知"
-    latest_week = snapshot.get("latest_year_week", "") or "未知"
+    time_context = snapshot.get("time_context", {}) if isinstance(snapshot.get("time_context", {}), dict) else {}
+    month_obs = time_context.get("month_observation", {}) if isinstance(time_context.get("month_observation", {}), dict) else {}
+    week_obs = time_context.get("week_observation", {}) if isinstance(time_context.get("week_observation", {}), dict) else {}
+    series = time_context.get("series", {}) if isinstance(time_context.get("series", {}), dict) else {}
+    latest_month = time_context.get("target_month", "") or snapshot.get("latest_year_month", "") or "未知"
+    latest_week = time_context.get("target_week", "") or snapshot.get("latest_year_week", "") or "未知"
     return f"""
     <section class="panel hero">
       <h1>本期业务判断总览</h1>
       <p class="lead">{_e(executive_brief.get('headline', '当前证据仍需复核后再形成正式判断。'))}</p>
-      <p class="lead">分析窗口：{_e(data_range.get('start_month', '未知'))} 至 {_e(data_range.get('end_month', '未知'))}；默认观察月：{_e(latest_month)}；默认观察周：{_e(latest_week)}。</p>
+      <p class="lead">分析窗口：{_e(data_range.get('start_month', '未知'))} 至 {_e(data_range.get('end_month', '未知'))}；系统默认观察完整月：{_e(latest_month)}；最新已归档周：{_e(latest_week)}。</p>
       <div class="grid cols-4">
         {_metric("业务证据", summary.get("total_business_evidence", 0), "进入业务问题层的原文证据")}
         {_metric("待复核", summary.get("review_needed_count", 0), "需要进入 20 条一轮复核")}
         {_metric("可行动", summary.get("actionable_count", 0), "可进报告或行动池")}
         {_metric("活跃销售", snapshot.get("active_sales_count", 0), "归一后的销售对象")}
       </div>
+      <div class="baseline-grid">
+        {_baseline_card("月度观察", month_obs)}
+        {_baseline_card("周度观察", week_obs)}
+      </div>
+    </section>
+    <section class="grid cols-2" style="margin-top:20px">
+      <div class="panel"><h2>月度 AI 证据趋势</h2>{_line_chart(series.get("months", []), "ai_mentions", "月度 AI 证据")}</div>
+      <div class="panel"><h2>周度 AI 证据趋势</h2>{_line_chart(series.get("weeks", []), "ai_mentions", "周度 AI 证据")}</div>
+      <div class="panel"><h2>医生接纳度结构</h2>{_bar_chart(summary.get("doctor_acceptance_breakdown", {}), DOCTOR_ACCEPTANCE_LABELS)}</div>
+      <div class="panel"><h2>销售 AI 使用结构</h2>{_bar_chart(summary.get("sales_ai_usage_breakdown", {}), SALES_AI_USAGE_LABELS)}</div>
     </section>
     <h1 style="margin-top:30px">5 个必须回答的问题</h1>
     <p class="lead">这里不是指标罗列，而是把当前证据翻译成产品负责人和销售管理者能判断的业务问题。</p>
@@ -289,21 +315,27 @@ def _trends(
     summary: Dict[str, object],
     insights: Sequence[Dict[str, object]],
 ) -> str:
-    monthly = [row for row in trend_cube if str(row.get("grain", "")) == "month"][-12:]
-    weekly = [row for row in trend_cube if str(row.get("grain", "")) == "week"][-12:]
+    time_context = snapshot.get("time_context", {}) if isinstance(snapshot.get("time_context", {}), dict) else {}
+    series = time_context.get("series", {}) if isinstance(time_context.get("series", {}), dict) else {}
+    monthly = list(series.get("months", [])) or [row for row in trend_cube if str(row.get("grain", "")) == "month"][-12:]
+    weekly = list(series.get("weeks", [])) or [row for row in trend_cube if str(row.get("grain", "")) == "week"][-12:]
+    month_obs = time_context.get("month_observation", {}) if isinstance(time_context.get("month_observation", {}), dict) else {}
+    week_obs = time_context.get("week_observation", {}) if isinstance(time_context.get("week_observation", {}), dict) else {}
     insight_rows = sorted(insights, key=lambda item: int(item.get("display_order", 99)))
     return f"""
     <h1>趋势中心</h1>
-    <p class="lead">趋势页必须解释变化，而不是只展示数量。当前默认展示月度、周度和每类业务问题的趋势解释。</p>
+    <p class="lead">趋势页必须解释变化，而不是只展示数量。默认观察完整自然月和最新已归档周，并显式展示同比/环比基准。</p>
     <section class="grid cols-4">
-      {_metric("最新月", snapshot.get("latest_month", ""), "默认月度窗口")}
-      {_metric("最新周", snapshot.get("latest_week", ""), "默认周度窗口")}
+      {_metric("观察月", time_context.get("target_month", snapshot.get("latest_month", "")), "系统日期推导的最新完整自然月")}
+      {_metric("观察周", time_context.get("target_week", snapshot.get("latest_week", "")), "系统日期推导的最新已归档周")}
       {_metric("证据总量", summary.get("total_business_evidence", 0), "业务问题层证据")}
       {_metric("待复核", summary.get("review_needed_count", 0), "影响趋势可信度")}
     </section>
     <section class="grid cols-2" style="margin-top:20px">
-      <div class="panel"><h2>近 12 个月</h2>{_period_table(monthly)}</div>
-      <div class="panel"><h2>近 12 周</h2>{_period_table(weekly)}</div>
+      <div class="panel"><h2>近 12 个月折线</h2>{_line_chart(monthly, "ai_mentions", "月度 AI 证据")}{_period_table(monthly)}</div>
+      <div class="panel"><h2>近 12 周折线</h2>{_line_chart(weekly, "ai_mentions", "周度 AI 证据")}{_period_table(weekly)}</div>
+      <div class="panel"><h2>月度同比/环比</h2>{_baseline_card("完整月观察", month_obs)}</div>
+      <div class="panel"><h2>周度同比/环比</h2>{_baseline_card("完整周观察", week_obs)}</div>
     </section>
     <section class="grid cols-2" style="margin-top:20px">
       {''.join(_trend_explain_card(item) for item in insight_rows)}
@@ -345,7 +377,7 @@ def _review(tasks: Sequence[Dict[str, object]]) -> str:
         cards = "".join(_review_card(row, idx, len(open_tasks)) for idx, row in enumerate(open_tasks, 1))
     return f"""
     <h1>复核学习工作台</h1>
-    <p class="lead">每轮只处理 20 条。你只判断业务价值和结论是否正确；错因、规则候选、Prompt 候选由系统自动生成。</p>
+    <p class="lead">每轮建议处理 20 条，但复核 1 条也会立即写回生效；累计 5 条形成候选建议，累计 20 条作为正式回归集。你只判断业务价值和结论是否正确；错因、规则候选、Prompt 候选由系统自动生成。</p>
     {cards}
     """
 
@@ -411,6 +443,95 @@ def _breakdown(payload: object, labels: Dict[str, str]) -> str:
     return "".join(f"<span class='tag'>{_e(labels.get(str(key), str(key)))} · {_e(value)}</span>" for key, value in payload.items() if int(value or 0) > 0)
 
 
+def _baseline_card(title: str, observation: Dict[str, object]) -> str:
+    if not observation:
+        return f"<div class='baseline-card'><strong>{_e(title)}</strong><p class='muted'>暂无时间基准。</p></div>"
+    period = observation.get("period", "未知")
+    available = bool(observation.get("available", False))
+    status = observation.get("status_note", "")
+    baselines = observation.get("baselines", {}) if isinstance(observation.get("baselines", {}), dict) else {}
+    rows = []
+    for name, payload in baselines.items():
+        if not isinstance(payload, dict):
+            continue
+        label = {"mom": "环比", "wow": "环比", "yoy": "同比"}.get(str(name), str(name))
+        rows.append(f"<div class='tag'>{_e(label)}：{_e(payload.get('period', ''))}</div><p class='muted'>{_e(payload.get('note', ''))}</p>")
+    warn_class = " warn" if not available else ""
+    return (
+        "<div class='baseline-card'>"
+        f"<span class='tag{warn_class}'>{_e(period)}</span>"
+        f"<strong>{_e(title)}</strong>"
+        f"<p class='muted'>{_e(status)}</p>"
+        f"{''.join(rows)}"
+        "</div>"
+    )
+
+
+def _line_chart(rows: object, field: str, title: str) -> str:
+    if not isinstance(rows, list) or not rows:
+        return "<p class='muted'>暂无可画趋势数据</p>"
+    values = [float(row.get(field, 0) or 0) for row in rows if isinstance(row, dict)]
+    if not values:
+        return "<p class='muted'>暂无可画趋势数据</p>"
+    max_value = max(values) or 1.0
+    width = 520
+    height = 170
+    pad_x = 28
+    pad_y = 20
+    step = (width - pad_x * 2) / max(len(values) - 1, 1)
+    points = []
+    for idx, value in enumerate(values):
+        x = pad_x + step * idx
+        y = height - pad_y - (value / max_value) * (height - pad_y * 2)
+        points.append((round(x, 2), round(y, 2), value))
+    path = " ".join(("M" if idx == 0 else "L") + f"{x},{y}" for idx, (x, y, _) in enumerate(points))
+    area = f"M{points[0][0]},{height-pad_y} " + path.replace("M", "L", 1) + f" L{points[-1][0]},{height-pad_y} Z"
+    dots = "".join(f"<circle class='dot' cx='{x}' cy='{y}' r='4'><title>{_e(value)}</title></circle>" for x, y, value in points)
+    labels = _chart_labels(rows, points)
+    return (
+        f"<div class='chart' aria-label='{_e(title)}'>"
+        f"<svg viewBox='0 0 {width} {height}' role='img'>"
+        f"<path class='area-path' d='{area}'></path>"
+        f"<path class='line-path' d='{path}'></path>"
+        f"{dots}{labels}"
+        "</svg></div>"
+    )
+
+
+def _chart_labels(rows: Sequence[Dict[str, object]], points: Sequence[tuple[float, float, float]]) -> str:
+    if not rows or not points:
+        return ""
+    indexes = sorted(set([0, len(rows) // 2, len(rows) - 1]))
+    labels = []
+    for idx in indexes:
+        row = rows[idx]
+        x, _, value = points[idx]
+        period = _period_for_reporter(row)
+        labels.append(f"<text class='axis-label' x='{x}' y='166' text-anchor='middle'>{_e(period)}</text>")
+        labels.append(f"<text class='axis-label' x='{x}' y='16' text-anchor='middle'>{_e(int(value))}</text>")
+    return "".join(labels)
+
+
+def _bar_chart(payload: object, labels: Dict[str, str]) -> str:
+    if not isinstance(payload, dict) or not payload:
+        return "<p class='muted'>暂无结构数据</p>"
+    filtered = [(str(key), int(value or 0)) for key, value in payload.items() if int(value or 0) > 0]
+    if not filtered:
+        return "<p class='muted'>暂无结构数据</p>"
+    max_value = max(value for _, value in filtered) or 1
+    rows = []
+    for key, value in sorted(filtered, key=lambda item: item[1], reverse=True):
+        pct = round(value / max_value * 100, 1)
+        rows.append(
+            "<div class='bar-row'>"
+            f"<div>{_e(labels.get(key, key))}</div>"
+            f"<div class='bar-track'><div class='bar-fill' style='width:{pct}%'></div></div>"
+            f"<strong>{_e(value)}</strong>"
+            "</div>"
+        )
+    return "".join(rows)
+
+
 def _period_table(rows: Sequence[Dict[str, object]]) -> str:
     if not rows:
         return "<p class='muted'>暂无时间序列数据</p>"
@@ -431,9 +552,14 @@ def _insight_card(item: Dict[str, object]) -> str:
       </div>
       <div class="card-title">{_e(item.get('insight_title', item.get('title','')))}</div>
       <p>{_e(item.get('conclusion', item.get('judgement','')))}</p>
+      <p class="muted"><strong>证据依据：</strong>{_e(item.get('evidence_basis',''))}</p>
+      <p class="muted"><strong>趋势判断：</strong>{_e(item.get('trend_judgement', item.get('trend_sentence','')))}</p>
+      <p class="muted"><strong>驱动因素：</strong>{_e(item.get('driving_factors', item.get('driver_sentence','')))}</p>
       <p class="muted"><strong>为什么重要：</strong>{_e(item.get('why_it_matters',''))}</p>
+      <p class="muted"><strong>产品含义：</strong>{_e(item.get('product_implication',''))}</p>
+      <p class="muted"><strong>销售管理含义：</strong>{_e(item.get('sales_management_implication',''))}</p>
       <p><strong>建议动作：</strong>{_e(item.get('action_recommendation',''))}</p>
-      <p class="muted"><strong>可信度限制：</strong>{_e(item.get('caveats',''))}</p>
+      <p class="muted"><strong>反证 / 不确定性：</strong>{_e(item.get('counter_evidence_or_uncertainty', item.get('caveats','')))}</p>
       <div class="label">代表原文</div>
       <div class="quote-list">{_quote_list(item.get('representative_quotes', []))}</div>
       <div class="small-grid">
@@ -459,6 +585,8 @@ def _trend_explain_card(item: Dict[str, object]) -> str:
 def _sales_profile_card(profile: Dict[str, object], facts: Sequence[Dict[str, object]]) -> str:
     question_counts = Counter(BUSINESS_QUESTION_LABELS.get(str(row.get("business_question", "")), str(row.get("business_question", ""))) for row in facts)
     doctor_feedback = sum(1 for row in facts if str(row.get("business_question", "")) in {BUSINESS_QUESTION_DOCTOR_ACCEPTANCE, BUSINESS_QUESTION_DOCTOR_DIRECT_NEED, BUSINESS_QUESTION_DOCTOR_INDIRECT_OPPORTUNITY})
+    sales_own_work = sum(1 for row in facts if str(row.get("business_question", "")) == BUSINESS_QUESTION_SALES_AI_USAGE)
+    market_company = sum(1 for row in facts if str(row.get("business_question", "")) in {BUSINESS_QUESTION_COMPETITOR_AI, BUSINESS_QUESTION_DOCTOR_INDIRECT_OPPORTUNITY})
     review_count = sum(1 for row in facts if bool(row.get("should_review", False)))
     quote = _quote_list([_quote_payload_for_reporter(row) for row in facts[:1]])
     return f"""
@@ -468,9 +596,12 @@ def _sales_profile_card(profile: Dict[str, object], facts: Sequence[Dict[str, ob
       <div class="small-grid">
         {_mini_metric("AI证据", profile.get("total_mentions", 0))}
         {_mini_metric("医生反馈", doctor_feedback or profile.get("doctor_feedback_mentions", 0))}
+        {_mini_metric("销售自己的工作", sales_own_work)}
+        {_mini_metric("市场/公司机会", market_company)}
         {_mini_metric("待复核", review_count)}
         {_mini_metric("主要方向", _dominant_label(question_counts))}
       </div>
+      <p class="muted"><strong>角色拆分：</strong>销售自己的 AI 使用、医生真实反馈、市场/公司机会分开看，避免把医生动作和销售动作混成一个结论。</p>
       <div style="margin-top:12px">{_breakdown(dict(question_counts.most_common(4)), {})}</div>
       {quote}
     </article>
@@ -574,6 +705,7 @@ def _review_card(row: Dict[str, object], idx: int, total: int) -> str:
           <a class="btn secondary" href="evidence.html">查看证据页</a>
         </div>
         <div class="status-line" data-review-status></div>
+        <div class="feedback-box" data-review-feedback style="display:none"></div>
       </div>
     </section>
     """
@@ -601,6 +733,19 @@ def _review_script() -> str:
       if (!el) return;
       el.textContent = text;
       el.style.color = isError ? 'var(--risk)' : 'var(--accent)';
+    }
+
+    function setFeedback(card, feedback) {
+      const el = card.querySelector('[data-review-feedback]');
+      if (!el || !feedback) return;
+      el.style.display = 'block';
+      el.innerHTML = [
+        '<strong>' + (feedback.saved_message || '已保存') + '</strong>',
+        '系统归因：' + (feedback.error_reason_label || feedback.error_reason || '观察累计'),
+        '优化去向：' + (feedback.update_type_label || feedback.update_type || '观察累计'),
+        '同类累计：' + (feedback.same_reason_count || 0) + ' 条。' + (feedback.next_threshold || ''),
+        '使用方式：' + (feedback.how_it_will_be_used || '')
+      ].map(line => '<div>' + line + '</div>').join('');
     }
 
     document.querySelectorAll('[data-submit-review]').forEach(button => {
@@ -639,9 +784,12 @@ def _review_script() -> str:
             throw new Error(payload.error || '提交失败');
           }
           setStatus(card, '已提交，已写回复核结果。', false);
-          card.classList.add('task-hidden');
-          const next = nextOpenCard(card);
-          if (next) next.scrollIntoView({behavior: 'smooth', block: 'start'});
+          setFeedback(card, payload.learning_feedback);
+          setTimeout(() => {
+            card.classList.add('task-hidden');
+            const next = nextOpenCard(card);
+            if (next) next.scrollIntoView({behavior: 'smooth', block: 'start'});
+          }, 900);
         } catch (err) {
           button.disabled = false;
           setStatus(card, err.message || String(err), true);

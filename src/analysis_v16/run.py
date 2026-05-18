@@ -14,6 +14,7 @@ from .business_questions import (
     build_executive_brief,
     summarize_business_questions,
 )
+from .prompt_context import PROMPT_CONTEXT_VERSION, build_prompt_context, render_prompt_reference_markdown
 from .reporter import build_weekly_brief, build_workbench_pages, write_json, write_jsonl, write_markdown, write_web_pages
 from .review_learning import (
     apply_review_decisions_to_facts,
@@ -21,6 +22,7 @@ from .review_learning import (
     build_review_batch,
     load_review_decisions,
 )
+from .time_windows import compute_time_context
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,6 +82,10 @@ def run_pipeline(
     trend_cube = _read_json(normalized_dir / "trend_cube.json", [])
     salesperson_profiles = _read_jsonl(normalized_dir / "salesperson_profile.jsonl")
     dashboard_snapshot = _read_json(normalized_dir / "dashboard_snapshot.json", {})
+    time_context = compute_time_context(trend_cube)
+    dashboard_snapshot["time_context"] = time_context
+    dashboard_snapshot["target_year_month"] = time_context.get("target_month", "")
+    dashboard_snapshot["target_year_week"] = time_context.get("target_week", "")
 
     analyzer = BusinessQuestionAnalyzer(
         mode=model_mode,
@@ -100,6 +106,9 @@ def run_pipeline(
     write_json(normalized_dir / "business_question_summary.json", business_summary)
     write_jsonl(normalized_dir / "business_insights.jsonl", business_insights)
     write_json(normalized_dir / "executive_brief.json", executive_brief)
+    write_json(normalized_dir / "time_context.json", time_context)
+    write_json(normalized_dir / "prompt_context.json", build_prompt_context())
+    write_json(normalized_dir / "dashboard_snapshot.json", dashboard_snapshot)
 
     write_jsonl(review_dir / "review_batch.jsonl", review_batch)
     write_markdown(review_dir / "learning_summary.md", learning_summary)
@@ -111,6 +120,7 @@ def run_pipeline(
     weekly_brief = build_weekly_brief(executive_brief, business_summary, business_insights, review_batch, dashboard_snapshot)
     write_markdown(reports_dir / "AI一线情报周报.md", weekly_brief)
     write_markdown(reports_dir / "AI一线情报月报.md", weekly_brief.replace("周度摘要", "月度复盘"))
+    write_markdown(reports_dir / "当前使用Prompt说明.md", render_prompt_reference_markdown())
 
     write_web_pages(
         web_dir,
@@ -142,6 +152,9 @@ def run_pipeline(
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "minimax_base_url_default": "https://api.minimaxi.com/v1",
         "minimax_model_default": "MiniMax-M2.7",
+        "prompt_context_version": PROMPT_CONTEXT_VERSION,
+        "target_month": time_context.get("target_month", ""),
+        "target_week": time_context.get("target_week", ""),
     }
     write_json(out_dir / "run_manifest.json", manifest)
 

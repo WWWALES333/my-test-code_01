@@ -5,11 +5,13 @@ import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Dict
 from urllib.parse import urlparse
 
 from .reporter import build_workbench_pages, write_jsonl, write_markdown
 from .review_learning import (
     apply_review_decision,
+    build_review_feedback,
     build_learning_outputs,
     build_review_batch,
     load_review_decisions,
@@ -85,11 +87,19 @@ def _handler(data_dir: Path):
                 reviewer=str(payload.get("reviewer", "")).strip() or "wales",
                 review_comment=str(payload.get("review_comment", "")).strip(),
             )
-            _refresh_learning_outputs(data_dir)
+            refreshed = _refresh_learning_outputs(data_dir)
+            feedback = build_review_feedback(
+                decision,
+                refreshed["decisions"],
+                rule_candidates=refreshed["rule_candidates"],
+                prompt_candidates=refreshed["prompt_candidates"],
+                label_candidates=refreshed["label_candidates"],
+                golden_set=refreshed["golden_set"],
+            )
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            self.wfile.write(json.dumps({"ok": True, "decision": decision}, ensure_ascii=False).encode("utf-8"))
+            self.wfile.write(json.dumps({"ok": True, "decision": decision, "learning_feedback": feedback}, ensure_ascii=False).encode("utf-8"))
 
         def log_message(self, format: str, *args) -> None:  # noqa: A003
             return
@@ -97,7 +107,7 @@ def _handler(data_dir: Path):
     return Handler
 
 
-def _refresh_learning_outputs(data_dir: Path) -> None:
+def _refresh_learning_outputs(data_dir: Path) -> Dict[str, object]:
     review_dir = data_dir / "review"
     facts = _read_jsonl(data_dir / "normalized" / "business_question_facts.jsonl")
     decisions = load_review_decisions(review_dir / "review_decisions.jsonl")
@@ -109,6 +119,15 @@ def _refresh_learning_outputs(data_dir: Path) -> None:
     write_jsonl(review_dir / "prompt_candidates.jsonl", prompt_candidates)
     write_jsonl(review_dir / "label_gap_candidates.jsonl", label_candidates)
     write_jsonl(review_dir / "golden_set.jsonl", golden_set)
+    return {
+        "decisions": decisions,
+        "review_batch": batch,
+        "learning_summary": learning_summary,
+        "rule_candidates": rule_candidates,
+        "prompt_candidates": prompt_candidates,
+        "label_candidates": label_candidates,
+        "golden_set": golden_set,
+    }
 
 
 def _build_pages(data_dir: Path):
@@ -118,6 +137,9 @@ def _build_pages(data_dir: Path):
     facts = _read_jsonl(normalized / "business_question_facts.jsonl")
     insights = _read_jsonl(normalized / "business_insights.jsonl")
     dashboard = _read_json(normalized / "dashboard_snapshot.json", {})
+    time_context = _read_json(normalized / "time_context.json", {})
+    if isinstance(time_context, dict) and "time_context" not in dashboard:
+        dashboard["time_context"] = time_context
     trend_cube = _read_json(normalized / "trend_cube.json", [])
     profiles = _read_jsonl(normalized / "salesperson_profile.jsonl")
     review_batch = _read_jsonl(data_dir / "review" / "review_batch.jsonl")

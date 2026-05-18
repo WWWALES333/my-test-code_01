@@ -91,7 +91,16 @@ python -m src.analysis_v16.webapp --data data/output/insights/v1.6
 
 然后打开 `http://127.0.0.1:8766/review`。静态 HTML 可以查看，但提交复核需要通过本地服务。
 
-9. `v1.6` real 模式默认使用 OpenAI 兼容 Minimax 配置：
+9. `v1.6` 会按当前系统日期自动计算默认观察窗口：
+- 最新完整自然月，例如 `2026-05-18` 对应 `2026-04`
+- 最新已归档周，例如 `2026-05-18` 对应 `2026-05-W2`
+- 若目标周期暂无产物，页面会明确提示当前数据最新到哪个周期，不会静默退回旧月份。
+
+运行后可查看：
+- `data/output/insights/v1.6/normalized/time_context.json`
+- `data/output/insights/v1.6/reports/当前使用Prompt说明.md`
+
+10. `v1.6` real 模式默认使用 OpenAI 兼容 Minimax 配置：
 ```bash
 export OPENAI_BASE_URL=https://api.minimaxi.com/v1
 export OPENAI_MODEL=MiniMax-M2.7

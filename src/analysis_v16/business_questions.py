@@ -8,6 +8,16 @@ from typing import Dict, Iterable, List, Sequence
 from src.analysis_v14.schema import DECISION_PENDING_HUMAN, TRIAGE_NEEDS_LLM, stable_hash
 
 from .model_adapter import OpenAICompatibleClient
+from .prompt_context import (
+    BUSINESS_ACTOR_LABELS,
+    BUSINESS_ACTOR_VALUES,
+    EVIDENCE_TYPE_LABELS,
+    EVIDENCE_TYPE_VALUES,
+    PROMPT_CONTEXT_VERSION,
+    SPEAKER_ROLE_LABELS,
+    SPEAKER_ROLE_VALUES,
+    build_prompt_context,
+)
 from .schema import (
     ACTIONABILITY_VALUES,
     ACTIONABILITY_LABELS,
@@ -180,6 +190,9 @@ def _rule_business_analysis(evidence: Dict[str, object]) -> Dict[str, object]:
     need_type = _infer_doctor_need(text, lower, question)
     sales_usage = _infer_sales_usage(text, lower, actor, question)
     competitor_signal = _infer_competitor_signal(text, lower, ai_scope, question)
+    speaker_role = _infer_speaker_role(text, actor, ai_scope, question)
+    business_actor = _infer_business_actor(speaker_role, question)
+    evidence_type = _infer_evidence_type(question, speaker_role, action_hint=actor)
     actionability = _infer_actionability(question, acceptance, need_type, sales_usage, competitor_signal, decision_status)
     confidence = _infer_business_confidence(
         text=text,
@@ -202,6 +215,13 @@ def _rule_business_analysis(evidence: Dict[str, object]) -> Dict[str, object]:
         "doctor_need_type": need_type,
         "sales_ai_usage_type": sales_usage,
         "competitor_signal_type": competitor_signal,
+        "speaker_role": speaker_role,
+        "speaker_role_label": SPEAKER_ROLE_LABELS.get(speaker_role, speaker_role),
+        "business_actor": business_actor,
+        "business_actor_label": BUSINESS_ACTOR_LABELS.get(business_actor, business_actor),
+        "evidence_type": evidence_type,
+        "evidence_type_label": EVIDENCE_TYPE_LABELS.get(evidence_type, evidence_type),
+        "reasoning_summary": _rule_reasoning_summary(question, speaker_role, business_actor, evidence_type),
         "actionability": actionability,
         "confidence": confidence,
         "should_review": bool(needs_llm or confidence < 0.55),
@@ -215,6 +235,9 @@ def _rule_business_analysis(evidence: Dict[str, object]) -> Dict[str, object]:
             "doctor_need_type": need_type,
             "sales_ai_usage_type": sales_usage,
             "competitor_signal_type": competitor_signal,
+            "speaker_role": speaker_role,
+            "business_actor": business_actor,
+            "evidence_type": evidence_type,
             "actionability": actionability,
             "confidence": confidence,
         },
@@ -236,21 +259,24 @@ def _rule_business_analysis(evidence: Dict[str, object]) -> Dict[str, object]:
 
 
 def _build_messages(evidence: Dict[str, object], baseline: Dict[str, object]) -> List[Dict[str, str]]:
+    context = build_prompt_context()
     return [
         {
             "role": "system",
             "content": (
-                "你是将军汤销售周报 AI 一线情报的边界判定器。"
-                "你只处理规则无法稳定判断的边界样本。必须只输出一个 JSON 对象。"
-                "如果现有分类不适用，不要强行归类，应标记 should_review=true。"
-                "字段必须包含 business_question,doctor_acceptance_level,doctor_need_type,"
-                "sales_ai_usage_type,competitor_signal_type,actionability,confidence,should_review,reason。"
+                "你是将军汤 AI 一线情报工作台的业务语义判定器，服务产品负责人和销售管理者。"
+                "你不是关键词分类器，而是要基于项目背景判断：谁在说、说给谁、发生在什么业务动作里、是否和 AI 有真实业务关系。"
+                "必须只输出一个 JSON 对象，不要输出 markdown。证据不足时不要强行归类，应标记 should_review=true。"
+                "输出字段必须包含 business_question,doctor_acceptance_level,doctor_need_type,"
+                "sales_ai_usage_type,competitor_signal_type,speaker_role,business_actor,evidence_type,"
+                "actionability,confidence,should_review,reason,reasoning_summary。"
             ),
         },
         {
             "role": "user",
             "content": json.dumps(
                 {
+                    "project_business_context": context,
                     "source_text": evidence.get("source_text", ""),
                     "context": {
                         "file_path": evidence.get("file_path", ""),
@@ -271,9 +297,28 @@ def _build_messages(evidence: Dict[str, object], baseline: Dict[str, object]) ->
                         "doctor_need_type": list(DOCTOR_NEED_VALUES),
                         "sales_ai_usage_type": list(SALES_AI_USAGE_VALUES),
                         "competitor_signal_type": list(COMPETITOR_SIGNAL_VALUES),
+                        "speaker_role": list(SPEAKER_ROLE_VALUES),
+                        "business_actor": list(BUSINESS_ACTOR_VALUES),
+                        "evidence_type": list(EVIDENCE_TYPE_VALUES),
                         "actionability": list(ACTIONABILITY_VALUES),
                     },
-                    "business_questions_cn": BUSINESS_QUESTION_LABELS,
+                    "labels_cn": {
+                        "business_question": BUSINESS_QUESTION_LABELS,
+                        "doctor_acceptance_level": DOCTOR_ACCEPTANCE_LABELS,
+                        "doctor_need_type": DOCTOR_NEED_LABELS,
+                        "sales_ai_usage_type": SALES_AI_USAGE_LABELS,
+                        "competitor_signal_type": COMPETITOR_SIGNAL_LABELS,
+                        "speaker_role": SPEAKER_ROLE_LABELS,
+                        "business_actor": BUSINESS_ACTOR_LABELS,
+                        "evidence_type": EVIDENCE_TYPE_LABELS,
+                        "actionability": ACTIONABILITY_LABELS,
+                    },
+                    "decision_steps": [
+                        "先判断说话主体和行动主体。",
+                        "再判断是否是医生真实反馈、销售自述、市场观察、竞品动作或公司机会。",
+                        "再判断业务问题和细分类。",
+                        "最后给出置信度、是否复核、中文原因和推理摘要。",
+                    ],
                 },
                 ensure_ascii=False,
             ),
@@ -300,11 +345,15 @@ def _classify_batch_with_llm(
     client = model_client or OpenAICompatibleClient()
     payload = {
         "task": "对规则无法稳定判断的边界样本做业务问题语义判定。",
+        "project_business_context": build_prompt_context(),
         "classification_principles": [
-            "只根据原文、上下文和规则基线判断，不要为了完整性强行归类。",
+            "先判断谁在说、谁在行动、说给谁、发生在什么业务动作里，再判断标签。",
+            "只根据原文、上下文、项目背景和规则基线判断，不要为了完整性强行归类。",
+            "医生反馈必须是医生/诊所用户表达，不是销售自己的复盘、学习或判断。",
             "医生直接诉求必须是医生明确提出 AI、平台、问诊、内容、体验、可靠性、效率、成本等诉求；药价、经济、旅游、药房、剂型等泛业务内容不能硬算医生 AI 诉求。",
             "医生接纳度必须体现医生对我方云诊室 AI 或平台 AI 的态度，包括正向、兴趣、观望、顾虑、拒绝。",
             "销售日常 AI 使用必须体现销售用 AI 自用提效、对外介绍、学习复盘、话术生成或客户触达。",
+            "公司内部可用 AI 降本增效的机会不能误标为医生反馈或销售动作。",
             "竞品/同行 AI 动作必须单独进入市场雷达，不污染我方云诊室 AI 结论。",
             "如果现有标签不适用或证据信号太弱，should_review=true，confidence 不得高于 0.55。",
         ],
@@ -314,6 +363,9 @@ def _classify_batch_with_llm(
             "doctor_need_type": list(DOCTOR_NEED_VALUES),
             "sales_ai_usage_type": list(SALES_AI_USAGE_VALUES),
             "competitor_signal_type": list(COMPETITOR_SIGNAL_VALUES),
+            "speaker_role": list(SPEAKER_ROLE_VALUES),
+            "business_actor": list(BUSINESS_ACTOR_VALUES),
+            "evidence_type": list(EVIDENCE_TYPE_VALUES),
             "actionability": list(ACTIONABILITY_VALUES),
         },
         "labels_cn": {
@@ -322,6 +374,9 @@ def _classify_batch_with_llm(
             "doctor_need_type": DOCTOR_NEED_LABELS,
             "sales_ai_usage_type": SALES_AI_USAGE_LABELS,
             "competitor_signal_type": COMPETITOR_SIGNAL_LABELS,
+            "speaker_role": SPEAKER_ROLE_LABELS,
+            "business_actor": BUSINESS_ACTOR_LABELS,
+            "evidence_type": EVIDENCE_TYPE_LABELS,
             "actionability": ACTIONABILITY_LABELS,
         },
         "items": [
@@ -353,10 +408,14 @@ def _classify_batch_with_llm(
                     "doctor_need_type": "allowed_values.doctor_need_type 之一",
                     "sales_ai_usage_type": "allowed_values.sales_ai_usage_type 之一",
                     "competitor_signal_type": "allowed_values.competitor_signal_type 之一",
+                    "speaker_role": "allowed_values.speaker_role 之一",
+                    "business_actor": "allowed_values.business_actor 之一",
+                    "evidence_type": "allowed_values.evidence_type 之一",
                     "actionability": "allowed_values.actionability 之一",
                     "confidence": "0-1 数字",
                     "should_review": "布尔值",
                     "reason": "一句中文原因",
+                    "reasoning_summary": "一句中文说明：谁在说、什么业务动作、为什么这样判定",
                 }
             ]
         },
@@ -366,8 +425,9 @@ def _classify_batch_with_llm(
             {
                 "role": "system",
                 "content": (
-                    "你是将军汤 AI 一线情报系统的业务语义判定器。"
-                    "你只处理边界样本，目标是减少低级错判。"
+                    "你是将军汤 AI 一线情报系统的业务语义判定器，服务产品负责人和销售管理者。"
+                    "你只处理边界样本，目标是减少因为缺少业务上下文导致的低级错判。"
+                    "重点判断谁在说、谁在行动、AI 与业务动作是否真实相关。"
                     "必须只输出一个 JSON 对象，格式为 {\"items\":[...]}。"
                     "不得输出 markdown，不得输出英文解释。"
                 ),
@@ -431,10 +491,17 @@ def _merge_llm_result(evidence: Dict[str, object], baseline: Dict[str, object], 
     merged["doctor_need_type"] = _pick(raw.get("doctor_need_type"), DOCTOR_NEED_VALUES, str(baseline["doctor_need_type"]))
     merged["sales_ai_usage_type"] = _pick(raw.get("sales_ai_usage_type"), SALES_AI_USAGE_VALUES, str(baseline["sales_ai_usage_type"]))
     merged["competitor_signal_type"] = _pick(raw.get("competitor_signal_type"), COMPETITOR_SIGNAL_VALUES, str(baseline["competitor_signal_type"]))
+    merged["speaker_role"] = _pick(raw.get("speaker_role"), SPEAKER_ROLE_VALUES, str(baseline.get("speaker_role", "unclear")))
+    merged["speaker_role_label"] = SPEAKER_ROLE_LABELS.get(str(merged["speaker_role"]), str(merged["speaker_role"]))
+    merged["business_actor"] = _pick(raw.get("business_actor"), BUSINESS_ACTOR_VALUES, str(baseline.get("business_actor", "unclear")))
+    merged["business_actor_label"] = BUSINESS_ACTOR_LABELS.get(str(merged["business_actor"]), str(merged["business_actor"]))
+    merged["evidence_type"] = _pick(raw.get("evidence_type"), EVIDENCE_TYPE_VALUES, str(baseline.get("evidence_type", "low_signal_context")))
+    merged["evidence_type_label"] = EVIDENCE_TYPE_LABELS.get(str(merged["evidence_type"]), str(merged["evidence_type"]))
     merged["actionability"] = _pick(raw.get("actionability"), ACTIONABILITY_VALUES, str(baseline["actionability"]))
     merged["confidence"] = max(0.0, min(1.0, float(raw.get("confidence", baseline.get("confidence", 0.5)) or 0.5)))
     merged["should_review"] = bool(raw.get("should_review", merged["confidence"] < 0.65))
     merged["review_reason"] = str(raw.get("reason", "")).strip() or str(baseline.get("review_reason", ""))
+    merged["reasoning_summary"] = str(raw.get("reasoning_summary", "")).strip() or str(baseline.get("reasoning_summary", ""))
     merged["llm_invoked"] = True
     merged["llm_failed"] = False
     return _post_process_business_fact(merged)
@@ -453,8 +520,14 @@ def _post_process_business_fact(fact: Dict[str, object]) -> Dict[str, object]:
         reason = str(updated.get("review_reason", "")).strip()
         suffix = "医生直接诉求缺少明确 AI/平台/问诊/功能体验语境，降级为待复核观察"
         updated["review_reason"] = f"{reason}；{suffix}" if reason else suffix
+        updated["speaker_role_label"] = SPEAKER_ROLE_LABELS.get(str(updated.get("speaker_role", "")), str(updated.get("speaker_role", "")))
+        updated["business_actor_label"] = BUSINESS_ACTOR_LABELS.get(str(updated.get("business_actor", "")), str(updated.get("business_actor", "")))
+        updated["evidence_type_label"] = EVIDENCE_TYPE_LABELS.get(str(updated.get("evidence_type", "")), str(updated.get("evidence_type", "")))
         return updated
     fact["business_question_label"] = BUSINESS_QUESTION_LABELS.get(question, question)
+    fact["speaker_role_label"] = SPEAKER_ROLE_LABELS.get(str(fact.get("speaker_role", "")), str(fact.get("speaker_role", "")))
+    fact["business_actor_label"] = BUSINESS_ACTOR_LABELS.get(str(fact.get("business_actor", "")), str(fact.get("business_actor", "")))
+    fact["evidence_type_label"] = EVIDENCE_TYPE_LABELS.get(str(fact.get("evidence_type", "")), str(fact.get("evidence_type", "")))
     return fact
 
 
@@ -540,6 +613,67 @@ def _infer_competitor_signal(text: str, lower: str, ai_scope: str, question: str
     if _has_any(text, ["对比", "比较", "问到", "客户说"]):
         return "customer_comparison"
     return "unknown"
+
+
+def _infer_speaker_role(text: str, actor: str, ai_scope: str, question: str) -> str:
+    if ai_scope == "competitor_ai" or question == BUSINESS_QUESTION_COMPETITOR_AI:
+        return "competitor_or_market"
+    if actor == "医生反馈" or _has_any(text, ["医生反馈", "老师反馈", "医生表示", "老师表示", "医生认为", "医生担心", "医生认可"]):
+        return "doctor_or_clinic_user"
+    if _has_any(text, ["诊所老板", "馆长", "负责人", "院长", "经营", "门店"]):
+        return "clinic_operator"
+    if actor in {"销售自用", "销售对外介绍"} or question == BUSINESS_QUESTION_SALES_AI_USAGE:
+        return "salesperson_reporter"
+    if _has_any(text, ["公司", "总部", "产品部", "内部", "流程"]):
+        return "company_internal"
+    if _has_any(text, ["市场", "政策", "行业", "同行"]):
+        return "competitor_or_market"
+    return "unclear"
+
+
+def _infer_business_actor(speaker_role: str, question: str) -> str:
+    if speaker_role == "doctor_or_clinic_user":
+        return "doctor"
+    if speaker_role == "clinic_operator":
+        return "clinic_operator"
+    if speaker_role == "salesperson_reporter":
+        return "salesperson"
+    if speaker_role == "competitor_or_market":
+        return "competitor" if question == BUSINESS_QUESTION_COMPETITOR_AI else "market"
+    if speaker_role == "company_internal":
+        return "company"
+    if question in {
+        BUSINESS_QUESTION_DOCTOR_ACCEPTANCE,
+        BUSINESS_QUESTION_DOCTOR_DIRECT_NEED,
+        BUSINESS_QUESTION_DOCTOR_INDIRECT_OPPORTUNITY,
+    }:
+        return "doctor"
+    return "unclear"
+
+
+def _infer_evidence_type(question: str, speaker_role: str, *, action_hint: str) -> str:
+    if question == BUSINESS_QUESTION_COMPETITOR_AI:
+        return "competitor_signal"
+    if speaker_role == "doctor_or_clinic_user":
+        return "doctor_feedback"
+    if question in {BUSINESS_QUESTION_DOCTOR_DIRECT_NEED, BUSINESS_QUESTION_DOCTOR_INDIRECT_OPPORTUNITY}:
+        return "product_opportunity"
+    if question == BUSINESS_QUESTION_SALES_AI_USAGE:
+        return "sales_reflection" if _has_any(action_hint, ["自用"]) else "sales_action"
+    if speaker_role == "company_internal":
+        return "company_efficiency_opportunity"
+    if speaker_role == "competitor_or_market":
+        return "market_observation"
+    return "low_signal_context"
+
+
+def _rule_reasoning_summary(question: str, speaker_role: str, business_actor: str, evidence_type: str) -> str:
+    return (
+        f"规则初判为「{BUSINESS_QUESTION_LABELS.get(question, question)}」，"
+        f"说话/行动主体为「{SPEAKER_ROLE_LABELS.get(speaker_role, speaker_role)}」，"
+        f"业务对象为「{BUSINESS_ACTOR_LABELS.get(business_actor, business_actor)}」，"
+        f"证据类型为「{EVIDENCE_TYPE_LABELS.get(evidence_type, evidence_type)}」。"
+    )
 
 
 def _infer_actionability(question: str, acceptance: str, need_type: str, sales_usage: str, competitor_signal: str, decision_status: str) -> str:
@@ -662,6 +796,8 @@ def _build_evidence_cluster_insight(question: str, items: Sequence[Dict[str, obj
     conclusion = _build_cluster_conclusion(question, items, breakdown, trend, top_regions, top_sales, review_rate)
     action = _build_cluster_action(question, confidence, review_rate, actionables, top_regions, top_sales)
     caveats = _build_caveats(review_rate, breakdown, evidence_count)
+    evidence_basis = _evidence_basis_sentence(breakdown, examples, review_needed, evidence_count)
+    product_implication, sales_implication = _implications(question, breakdown, top_regions, top_sales)
     return {
         "insight_id": stable_hash("v16-cluster", question, str(evidence_count), str(trend.get("latest_period", ""))),
         "display_order": _question_order(question),
@@ -672,6 +808,12 @@ def _build_evidence_cluster_insight(question: str, items: Sequence[Dict[str, obj
         "conclusion": conclusion,
         "judgement": conclusion,
         "why_it_matters": _build_why_it_matters(question),
+        "evidence_basis": evidence_basis,
+        "trend_judgement": _trend_sentence(trend),
+        "driving_factors": _driver_sentence(top_regions, top_sales, review_rate),
+        "counter_evidence_or_uncertainty": caveats,
+        "product_implication": product_implication,
+        "sales_management_implication": sales_implication,
         "action_recommendation": action,
         "caveats": caveats,
         "trend_sentence": _trend_sentence(trend),
@@ -699,23 +841,37 @@ def _refine_cluster_insight_with_llm(
     try:
         client = model_client or OpenAICompatibleClient()
         payload = {
+            "project_business_context": build_prompt_context(),
             "business_question": insight.get("title", ""),
             "current_structured_insight": {
                 "conclusion": insight.get("conclusion", ""),
+                "evidence_basis": insight.get("evidence_basis", ""),
                 "trend_sentence": insight.get("trend_sentence", ""),
                 "driver_sentence": insight.get("driver_sentence", ""),
+                "counter_evidence_or_uncertainty": insight.get("counter_evidence_or_uncertainty", ""),
+                "product_implication": insight.get("product_implication", ""),
+                "sales_management_implication": insight.get("sales_management_implication", ""),
                 "breakdown": insight.get("breakdown", {}),
                 "top_regions": insight.get("top_regions", []),
                 "top_sales": insight.get("top_sales", []),
                 "review_rate": insight.get("review_rate", 0),
             },
-            "representative_evidence": [_quote_payload(item) for item in _representative_examples(items, question=str(insight.get("business_question", "")), limit=8)],
+            "representative_evidence": [
+                _quote_payload_for_llm(item)
+                for item in _representative_examples(items, question=str(insight.get("business_question", "")), limit=5)
+            ],
             "output_contract": {
-                "insight_title": "一句不超过28字的业务标题",
-                "conclusion": "直接回答业务问题，不复述数字，不输出英文枚举",
-                "why_it_matters": "说明对产品或销售管理为什么重要",
-                "action_recommendation": "给出下一步动作",
-                "caveats": "可信度限制或需复核点",
+                "insight_title": "不超过24字",
+                "conclusion": "不超过80字，直接回答业务问题",
+                "evidence_basis": "不超过80字，说明证据依据",
+                "trend_judgement": "不超过60字，说明趋势或数据不足",
+                "driving_factors": "不超过80字，说明区域/销售/场景驱动",
+                "counter_evidence_or_uncertainty": "不超过80字，说明反证或不确定性",
+                "why_it_matters": "不超过60字，说明为什么重要",
+                "product_implication": "不超过80字，说明产品含义",
+                "sales_management_implication": "不超过80字，说明销售管理含义",
+                "action_recommendation": "不超过80字，给出下一步动作",
+                "caveats": "不超过60字，可信度限制",
             },
         }
         refined = client.chat_json(
@@ -723,18 +879,33 @@ def _refine_cluster_insight_with_llm(
                 {
                     "role": "system",
                 "content": (
-                    "你是高级 AI 业务洞察员。你基于销售周报证据簇写业务判断。"
+                    "你是高级 AI 业务洞察员，正在为将军汤 AI 一线情报工作台生成业务判断。"
+                    "你必须置身于云诊室/云管家业务、销售周/月报和医生反馈场景中理解证据。"
                     "只能输出 JSON，不要输出 markdown。"
                     "禁止输出英文枚举、技术字段、内部 evidence_id、空泛套话。"
-                    "每个结论必须能被代表原文支撑；证据不足就明确写可信度限制，不要过度推断。"
+                    "每个字段必须短句输出，不要输出长段落，避免 JSON 被截断。"
+                    "每个结论必须包含业务结论、证据依据、趋势判断、驱动因素、反证/不确定性、产品含义、销售管理含义和下一步动作。"
+                    "证据不足就明确写可信度限制，不要过度推断。"
                 ),
                 },
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
-            max_tokens=1100,
+            max_tokens=2400,
         )
         merged = dict(insight)
-        for key in ("insight_title", "conclusion", "why_it_matters", "action_recommendation", "caveats"):
+        for key in (
+            "insight_title",
+            "conclusion",
+            "evidence_basis",
+            "trend_judgement",
+            "driving_factors",
+            "counter_evidence_or_uncertainty",
+            "why_it_matters",
+            "product_implication",
+            "sales_management_implication",
+            "action_recommendation",
+            "caveats",
+        ):
             value = str(refined.get(key, "")).strip()
             if value:
                 merged[key] = value
@@ -825,6 +996,16 @@ def _quote_payload(item: Dict[str, object]) -> Dict[str, object]:
         "region": item.get("region_name", "") or "未识别区域",
         "period": period,
         "file_path": item.get("file_path", ""),
+    }
+
+
+def _quote_payload_for_llm(item: Dict[str, object]) -> Dict[str, object]:
+    period = _period_label(item)
+    return {
+        "quote": str(item.get("source_text", ""))[:160],
+        "salesperson": item.get("salesperson_name", "") or "未识别销售",
+        "region": item.get("region_name", "") or "未识别区域",
+        "period": period,
     }
 
 
@@ -954,6 +1135,62 @@ def _build_caveats(review_rate: float, breakdown: Dict[str, int], evidence_count
     if evidence_count < 10:
         caveats.append("样本量偏小，只能作为观察线索。")
     return " ".join(caveats) if caveats else "证据质量相对稳定，但仍需保留原文追溯。"
+
+
+def _evidence_basis_sentence(
+    breakdown: Dict[str, int],
+    examples: Sequence[Dict[str, object]],
+    review_needed: int,
+    evidence_count: int,
+) -> str:
+    dominant_label, dominant_count = _dominant(breakdown)
+    quote_hint = ""
+    if examples:
+        first = str(examples[0].get("source_text", ""))[:80]
+        quote_hint = f"代表原文显示：{first}"
+    if dominant_label:
+        return f"证据共 {evidence_count} 条，其中「{dominant_label}」最多（{dominant_count} 条），待复核 {review_needed} 条。{quote_hint}"
+    return f"证据共 {evidence_count} 条，待复核 {review_needed} 条；当前分类结构尚不稳定。{quote_hint}"
+
+
+def _implications(
+    question: str,
+    breakdown: Dict[str, int],
+    top_regions: Sequence[Dict[str, object]],
+    top_sales: Sequence[Dict[str, object]],
+) -> tuple[str, str]:
+    dominant_label, _ = _dominant(breakdown)
+    region = top_regions[0]["name"] if top_regions else "高频区域"
+    salesperson = top_sales[0]["name"] if top_sales else "高频销售"
+    if question == BUSINESS_QUESTION_DOCTOR_ACCEPTANCE:
+        return (
+            f"产品侧应优先拆解医生对 AI 的「{dominant_label or '接纳/顾虑'}」来源，判断是能力体验、信任、安全还是流程适配问题。",
+            f"销售管理侧应要求 {region} / {salesperson} 补充医生原话和场景，沉淀可复用话术与反对意见处理。",
+        )
+    if question == BUSINESS_QUESTION_DOCTOR_DIRECT_NEED:
+        return (
+            f"产品侧应把「{dominant_label or '待判断诉求'}」作为候选需求池，结合原文判断是否是真需求而非泛业务问题。",
+            "销售管理侧应规范需求收集格式，要求补充医生角色、使用场景、当前替代方案和影响程度。",
+        )
+    if question == BUSINESS_QUESTION_DOCTOR_INDIRECT_OPPORTUNITY:
+        return (
+            f"产品侧应从「{dominant_label or '间接场景'}」里识别 AI 可介入的工作流，而不是只看医生是否直接提 AI。",
+            "销售管理侧应引导销售记录具体阻塞点，避免只写泛泛的客户困难。",
+        )
+    if question == BUSINESS_QUESTION_SALES_AI_USAGE:
+        return (
+            "产品侧可观察销售真实使用方式，反推一线需要的 AI 资料、话术和培训素材。",
+            f"销售管理侧应复盘 {salesperson} 的具体用法，判断是否能形成团队案例或培训材料。",
+        )
+    if question == BUSINESS_QUESTION_COMPETITOR_AI:
+        return (
+            "产品侧应把竞品/同行动作作为市场雷达，不直接纳入我方 AI 接纳度。",
+            "销售管理侧应沉淀客户比较话术，避免一线对竞品 AI 缺少统一回应。",
+        )
+    return (
+        "产品侧暂不直接行动，先看区域/销售差异是否由真实需求驱动。",
+        f"销售管理侧应下钻 {region} 与 {salesperson}，判断是个人高频还是区域普遍扩散。",
+    )
 
 
 def _build_insight_title(question: str, breakdown: Dict[str, int], trend: Dict[str, object]) -> str:
